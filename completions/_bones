@@ -1,0 +1,38 @@
+#compdef bones bones.sh
+# zsh completion for bones. Enable by putting this dir on your fpath, e.g.:
+#   fpath=(~/.claude/skills/bones-pipeline/completions $fpath); autoload -U compinit; compinit
+_bones() {
+  local -a subs
+  subs=(
+    'init:start a pipeline'
+    'status:where am I, which gate is open'
+    'approve:satisfy an owner/agent gate'
+    'build:run the auto (machine-verified) gate'
+    'next:advance if the gate is satisfied'
+    'back:regress to an earlier stage'
+    'kill:owner stops the build (terminal, status=killed)'
+    'note:journal an observation'
+    'log:full audit trail'
+    'verify:recompute the tamper-evident chain'
+    'seal:git-commit .bones/ (the external anchor)'
+    'stats:per-stage time + regressions'
+    'config:show resolved settings'
+    'doctor:environment checks'
+    'reset:wipe .bones state'
+  )
+  if (( CURRENT == 2 )); then
+    _describe 'bones command' subs
+    return
+  fi
+  case ${words[2]} in
+    init)    _arguments '-t[target dir]:dir:_files -/' '-n[name]:name:' \
+                        '-T[template]:template:(code ops research)' '-H[strict owner gates]' '-f[force]' ;;
+    approve) _arguments '-q[owner verbatim quote]:quote:' '*-e[evidence file]:file:_files' ;;
+    build)   _arguments '-c[acceptance command]:cmd:' '-s[spec file]:file:_files' \
+                        '-r[rubric]:file:_files' '-R[reviewer]:reviewer:(auto codex gemini none)' ;;
+    back)    _arguments '-s[stage to return to]:stage:' '-r[reason]:reason:' ;;
+    kill)    _arguments '-q[owner verbatim quote]:quote:' '-r[reason]:reason:' ;;
+    reset)   _arguments '-f[force]' ;;
+  esac
+}
+_bones "$@"

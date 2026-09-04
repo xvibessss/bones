@@ -1,0 +1,8 @@
+# macOS
+.DS_Store
+# editor/scratch
+*.bak
+*.tmp
+*~
+# a demo pipeline accidentally run inside this repo (bones state belongs in YOUR project, not here)
+/.bones/

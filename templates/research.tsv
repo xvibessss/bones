@@ -1,0 +1,10 @@
+question	Question + scope	agent	0
+commit	Kill-or-commit	owner	0
+method	Methodology sign-off	owner	1
+critique	Peer / adversarial critique	agent	0
+gather	Gather data (validation check)	auto	0
+analyze	Analysis + sanity checks	agent	1
+draft	Draft findings (not published)	agent	1
+publish	Publish / submit (irreversible)	owner	0
+present	Present	step	0
+operate	Operate + learn	owner	0

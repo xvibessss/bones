@@ -1,0 +1,10 @@
+brief	Brief + interrogation	agent	0
+commit	Kill-or-commit	owner	0
+plan	Plan / outline sign-off	owner	1
+critique	Critique / second-pass	agent	0
+produce	Produce (acceptance check)	auto	0
+review	Quality + risk review	agent	1
+dry-run	Dry-run (validated, not sent)	agent	1
+publish	Publish / send (irreversible)	owner	0
+present	Present	step	0
+operate	Operate + learn	owner	0

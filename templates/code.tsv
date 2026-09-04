@@ -1,0 +1,10 @@
+brainstorm	Brainstorm + prompt interrogation	agent	0
+kill-or-commit	Kill-or-commit	owner	0
+spec	Spec sign-off	owner	1
+council	Council / second-pass critique	agent	0
+build-loop	Build loop (acceptance gate)	auto	0
+review-security	Adversarial review + security	agent	1
+staging	Staging validation	agent	1
+promote	Promote + production smoke test	owner	0
+present	Present	step	0
+operate	Operate + learn	owner	0

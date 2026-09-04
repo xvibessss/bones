@@ -1,0 +1,8 @@
+# bones config — copy to ~/.bonesrc (global) or .bones/config (per-pipeline).
+# Resolution, last wins: built-in defaults → ~/.bonesrc → .bones/config → env.
+# Env overrides: BONES_OWNER, BONES_TEMPLATE, BONES_REVIEWER, BONES_SIGN.
+
+owner    = your name   # whose call the owner gates are (shown in prompts)
+template = code        # default pipeline for `init`: code | ops | research
+reviewer = auto        # default -R for `build` (auto | codex | gemini | none)
+sign     = 0           # 1 = GPG-sign owner-gate consent (needs a gpg key)
