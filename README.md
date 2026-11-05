@@ -108,23 +108,32 @@ exits non-zero on any of these:
 - a gate revoked by `bones back` and then copied back out of the archive;
 - stages skipped by editing `"stage"` in `state.json`, or a passed gate deleted;
 - a kill undone by editing `state.json` instead of `bones back`, or its record deleted;
+- a chain rewritten or truncated after `bones seal` committed it — even one that
+  is internally consistent (see below);
 - (with `sign=1`) a GPG signature on owner consent that no longer validates.
 
-**Commit `.bones/` with your build** (`bones seal` verifies, then commits it) so
-git history anchors the chain.
+**Seal as you go.** `bones seal` verifies the chain, then commits `.bones/` to the
+target repo. From then on `verify` reads every version of the ledger in git
+history and requires each one to be a prefix of the live ledger: the chain only
+ever grows, so anything else is a rewrite.
+
+Starting over in a repo that holds a sealed pipeline is explicit, so it can't be
+confused with a rewrite: `bones reset -f`, commit the removal of `.bones/`, then
+`bones init`. `verify` reports the restart and the commit it happened at.
 
 ### Threat model — what the chain does and doesn't prove
 
 The chain is hashed, not keyed: anyone with write access to `.bones/` *and* the
-patience to recompute every hash can rewrite the whole thing consistently. What
-stops that is outside the ledger: the chain committed in git history (a rewrite
-shows up as a diff against what was sealed and pushed) and, for owner consent,
-GPG signatures made with a key the agent doesn't hold. In short:
+patience to recompute every hash can produce a new chain that is consistent on
+its own. What stops that is outside the ledger: the versions already sealed in
+git history (`verify` checks the live chain extends each of them) and, for owner
+consent, GPG signatures made with a key the agent doesn't hold. In short:
 
 | Guarantee | Needs |
 |---|---|
 | Accidental or casual edits, skipped stages, forged/resurrected gates are caught | nothing — `bones verify` |
-| A full, consistent rewrite of `.bones/` is caught | `.bones/` sealed and pushed (`bones seal`) |
+| A full, consistent rewrite of `.bones/` is caught | `bones seal` — `verify` compares every sealed version |
+| …even if the agent also rewrites git history | the seals pushed to a protected branch (no force-push) |
 | "The owner consented" is non-repudiable | `sign=1` with the owner's own GPG key |
 | The agent can't type the owner's approval itself | `init -H` and the agent has no interactive TTY |
 
@@ -132,6 +141,33 @@ bones keeps an honest agent honest and makes a dishonest one leave evidence. It
 is not a sandbox: it can't stop an agent with full shell access from lying in the
 *content* of a note — which is why owner gates demand verbatim quotes and agent
 gates take `-e` evidence files pinned by sha256.
+
+### Verify in CI
+
+Make a broken or rewritten chain fail the build of the project that uses bones.
+Add this workflow to **that** project (not to bones itself):
+
+```yaml
+# .github/workflows/bones.yml
+name: bones
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history: verify compares every sealed ledger
+      - name: Verify the bones audit chain
+        run: |
+          git clone --quiet --depth 1 --branch v1.2.0 https://github.com/xvibessss/bones "$RUNNER_TEMP/bones"
+          bash "$RUNNER_TEMP/bones/scripts/bones.sh" verify
+```
+
+`verify` finds `.bones/` by walking up from the working directory; if your
+pipeline lives in a subdirectory, add `working-directory: <that dir>` to the
+step. Pinning a tag (`--branch v1.2.0`) keeps the verifier itself from changing
+under you.
 
 ---
 
@@ -147,7 +183,7 @@ gates take `-e` evidence files pinned by sha256.
 | `kill -q "quote" -r "why"` | owner STOPS the build — terminal chain link, status=killed |
 | `note "text"` · `log` | journal an observation · full audit trail |
 | `verify` | recompute the tamper-evident chain |
-| `seal` | git-commit `.bones/` (the external anchor; verifies first) |
+| `seal` | verify, then git-commit `.bones/` — later `verify`s check the chain only grew |
 | `stats` | per-stage time + regressions |
 | `config` · `doctor` | resolved settings · environment checks |
 | `reset -f` | wipe `.bones/` |
@@ -216,10 +252,11 @@ Commit `.bones/` alongside your work — it's the audit trail.
 bash scripts/test.sh
 ```
 
-50 checks (47 when `gpg` isn't installed): happy path, gate refusals, the build
-gate, eleven tamper attacks on the ledger, gate files and `state.json`, back+redo,
-concurrency, templates, config, kill (stop/refusals/tamper/revive), the non-git
-warning, the jq-less fallback parser, and GPG signing. CI runs it on Linux and
+63 checks (60 when `gpg` isn't installed): happy path, gate refusals, the build
+gate, twelve tamper attacks on the ledger, gate files, `state.json` and sealed
+history, back+redo, seal and explicit restarts, strict mode, concurrency,
+templates, config files, kill (stop/refusals/tamper/revive), log and stats, the
+non-git warning, the jq-less fallback parser, and GPG signing. CI runs it on Linux and
 macOS (bash 3.2), with and without `jq`, plus `shellcheck`.
 
 ---

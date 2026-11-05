@@ -32,13 +32,14 @@
 # the sha256 of the previous link, of the gate record and the target's git commit.
 # `bones verify` recomputes the chain and fails on any edit, insertion, deletion,
 # truncation, forged or resurrected gate file, or a stage skipped by editing state.
-# Commit .bones/ with your work (`bones seal`) so git history anchors the chain.
+# `bones seal` commits .bones/; from then on verify requires every sealed version
+# of the ledger to be a prefix of the live one, so even a consistent rewrite shows.
 #
 # Run `bones help` for usage.
 #
 set -uo pipefail
 
-BONES_VERSION="1.1.0"
+BONES_VERSION="1.2.0"
 
 # Resolve this script's real directory (following symlinks, e.g. ~/.local/bin/bones),
 # so we can find the shipped loop.sh and templates/ regardless of how bones was invoked.
@@ -245,6 +246,14 @@ git_ref() { # short commit + clean/dirty for the target repo, or "no-git"
   fi
 }
 
+# True (rc 0) when <bones_dir>/ledger is part of the target repo's HEAD commit,
+# i.e. the chain has been sealed and not explicitly removed since.
+ledger_sealed_in_head() { # ledger_sealed_in_head <bones_dir>
+  command -v git >/dev/null 2>&1 || return 1
+  git -C "$1" rev-parse --git-dir >/dev/null 2>&1 || return 1
+  git -C "$1" cat-file -e "HEAD:./ledger" 2>/dev/null
+}
+
 chain_head() { local h; h="$(state_get head 2>/dev/null)"; [ -n "$h" ] && printf '%s' "$h" || printf '%s' "$GENESIS"; }
 
 # True (rc 0) when NO ledger link is bound to a real git commit — the chain is
@@ -372,6 +381,9 @@ cmd_init() {
   local dir="$target/.bones"
   if [ -d "$dir" ] && [ "$force" -ne 1 ]; then
     die "already initialized at $dir (use 'init -f' to reset, or 'status')"
+  fi
+  if [ -d "$dir" ] && ledger_sealed_in_head "$dir"; then
+    die "this pipeline is sealed in git — replacing it would read as a rewrite. Run 'bones reset -f', commit the removal of .bones/, then 'bones init'."
   fi
   rm -rf "$dir"; mkdir -p "$dir/gates"
   printf '.lock/\n.tmp.*\n' > "$dir/.gitignore"   # runtime scratch never gets committed/anchored
@@ -827,9 +839,39 @@ cmd_verify() {
     fi
   fi
 
+  # Pass 5 — git anchor: every version of the ledger committed to git (by `bones
+  # seal` or by hand) must be a prefix of the live ledger. The chain is append-only,
+  # so this catches a full, consistent rewrite of .bones/ after it was sealed — the
+  # one attack the hashes alone can't see. A commit that deleted the ledger marks an
+  # explicit restart (`bones reset -f` + commit): versions before it are not compared.
+  local in_git=0 sealed=0 restart="" c ctmp csize
+  if command -v git >/dev/null 2>&1 && git -C "$BONES_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    in_git=1
+    ctmp="$(mktemp)"
+    for c in $(git -C "$BONES_DIR" log --format=%H -- ledger 2>/dev/null); do
+      if ! git -C "$BONES_DIR" show "$c:./ledger" > "$ctmp" 2>/dev/null; then
+        restart="$c"; break
+      fi
+      csize="$(wc -c < "$ctmp" | tr -d ' ')"
+      if ! head -c "$csize" "$ledger" | cmp -s - "$ctmp"; then
+        rm -f "$ctmp"
+        printf 'bones: ✗ CHAIN REWRITTEN: the ledger sealed in git commit %s is not a prefix of the live one — .bones/ was rewritten or truncated after it was sealed (see `git log -p -- .bones/ledger`).\n' "$(printf '%s' "$c" | cut -c1-12)" >&2
+        exit 1
+      fi
+      sealed=$((sealed+1))
+    done
+    rm -f "$ctmp"
+  fi
+
   printf 'bones: ✓ CHAIN VERIFIED — %s links intact and in order; head %s…\n' "$n" "$(printf '%s' "$prev" | cut -c1-12)"
   printf '       every gate record is unaltered, and every live gate file matches its signature.\n'
   if [ "$signed" -gt 0 ]; then printf '       %s owner gate(s) carry a valid GPG signature.\n' "$signed"; fi
+  if [ "$sealed" -gt 0 ]; then
+    printf '       ⚓ anchored: %s sealed version(s) in git history, each a prefix of the live chain.\n' "$sealed"
+  elif [ "$in_git" -eq 1 ]; then
+    printf '       • not sealed yet — `bones seal` commits the chain so git history can catch a full rewrite.\n'
+  fi
+  [ -n "$restart" ] && printf '       ↻ chain restarted at git commit %s (an earlier sealed ledger was removed there).\n' "$(printf '%s' "$restart" | cut -c1-12)"
   if chain_unanchored; then
     printf '       ⚠ UNANCHORED: no link is bound to a git commit, so the chain is\n'
     printf '         tamper-evident but not externally anchored against a full rewrite.\n'
@@ -952,7 +994,12 @@ cmd_reset() {
   local force=0; [ "${1:-}" = "-f" ] && force=1
   if [ "$force" -ne 1 ]; then die "this deletes $BONES_DIR — re-run 'bones reset -f' to confirm"; fi
   acquire_lock
+  local was_sealed=0; ledger_sealed_in_head "$BONES_DIR" && was_sealed=1
   rm -rf "$BONES_DIR"; printf 'bones: reset (removed %s)\n' "$BONES_DIR"
+  if [ "$was_sealed" -eq 1 ]; then
+    printf '       .bones/ was sealed in git: commit its removal (e.g. `git add -A .bones && git commit -m "bones: reset"`)\n'
+    printf '       before the next init, so `verify` sees an explicit restart instead of a rewrite.\n'
+  fi
 }
 
 usage() {

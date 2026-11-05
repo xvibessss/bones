@@ -234,5 +234,64 @@ T="$(mktemp -d)"
 ( bash "$BONES" init -t "$T" -n 'bad"name' >/dev/null 2>&1 ) && no "init accepted a quote in the name" || ok "init rejects a name that would break state.json"
 rm -rf "$T"
 
+# ---- 16. seal + git anchor: a full rewrite after sealing is caught ----
+G() { local d="$1"; shift; git -C "$d" -c user.email=t@t -c user.name=t "$@"; }   # git with an identity
+T="$(mkchain)"
+# seal commits with the repo's own identity: give the throwaway repo one
+G "$T" config user.email t@t; G "$T" config user.name t; G "$T" config commit.gpgsign false
+( cd "$T" && bash "$BONES" seal >/dev/null 2>&1 )
+G "$T" cat-file -e HEAD:.bones/ledger 2>/dev/null && ok "seal commits .bones/ into git" || no "seal did not commit the ledger"
+sv="$( cd "$T" && bash "$BONES" verify 2>&1 )"
+case "$sv" in *"anchored: 1 sealed"*) ok "verify reports the sealed anchor" ;; *) no "verify did not report the anchor" "$sv" ;; esac
+# more work + a second seal: still a clean prefix chain
+( cd "$T" && b next >/dev/null && b approve "council: no blocking objections" >/dev/null && bash "$BONES" seal >/dev/null 2>&1 )
+V "$T" && ok "second seal: history stays append-only" || no "second seal broke verify"
+# re-init over a sealed pipeline is refused (it would read as a rewrite)
+( cd "$T" && bash "$BONES" init -t . -f >/dev/null 2>&1 ) && no "init -f replaced a sealed pipeline" || ok "init -f refuses to replace a sealed pipeline"
+# the attack: wipe .bones/ (uncommitted) and forge a fresh, internally valid chain
+rm -rf "$T/.bones"
+( cd "$T" && b init -t . -n atk >/dev/null 2>&1 && b approve "scope pinned (forged)" >/dev/null && b next >/dev/null \
+  && b approve -q "go" "forged commit" >/dev/null )
+rw="$( cd "$T" && bash "$BONES" verify 2>&1 )"
+case "$rw" in *"CHAIN REWRITTEN"*) ok "attack: full rewrite after seal caught" ;; *) no "full rewrite after seal not caught" "$rw" ;; esac
+# the honest path: reset, commit the removal, start over — verify passes and says so
+( cd "$T" && bash "$BONES" reset -f >/dev/null 2>&1 )
+G "$T" add -A .bones && G "$T" commit -qm "bones: reset" >/dev/null
+( cd "$T" && b init -t . -n again >/dev/null 2>&1 && b approve "scope pinned for the new run" >/dev/null )
+rs="$( cd "$T" && bash "$BONES" verify 2>&1 )"
+case "$rs" in *"CHAIN VERIFIED"*"restarted at git commit"*) ok "explicit reset + commit: new chain verifies, restart reported" ;; *) no "explicit restart not handled" "$rs" ;; esac
+rm -rf "$T"
+
+# ---- 17. strict mode: owner decisions need an interactive terminal ----
+T="$(mktemp -d)"; ( cd "$T" && git init -q && echo x>f && git add -A && git -c user.email=t@t -c user.name=t commit -qm i >/dev/null )
+b init -t "$T" -H >/dev/null 2>&1
+( cd "$T" && b approve "scope pinned under strict mode" >/dev/null </dev/null ) && ok "strict: agent gates still work non-interactively" || no "strict blocked an agent gate"
+( cd "$T" && b next >/dev/null </dev/null )
+( cd "$T" && b approve -q "go" "committed" >/dev/null 2>&1 </dev/null ) && no "strict: owner gate passed without a TTY" || ok "strict: owner gate refused without a TTY"
+( cd "$T" && b kill -q "stop" -r "not worth it" >/dev/null 2>&1 </dev/null ) && no "strict: kill passed without a TTY" || ok "strict: kill refused without a TTY"
+rm -rf "$T"
+
+# ---- 18. config files: ~/.bonesrc, then .bones/config (inline comments ignored) ----
+H="$(mktemp -d)"; T="$(mktemp -d)"
+( cd "$T" && git init -q && echo x>f && git add -A && git -c user.email=t@t -c user.name=t commit -qm i >/dev/null )
+printf 'owner = Alex Doe   # whose call\ntemplate = code\n' > "$H/.bonesrc"
+HOME="$H" bash "$BONES" init -t "$T" >/dev/null 2>&1
+( cd "$T" && HOME="$H" bash "$BONES" approve "scope pinned real note" >/dev/null && HOME="$H" bash "$BONES" next >/dev/null )
+c1="$( cd "$T" && HOME="$H" bash "$BONES" status )"
+case "$c1" in *"ALEX DOE'S call"*) ok "config: ~/.bonesrc owner (inline comment stripped)" ;; *) no "config: ~/.bonesrc owner not applied" ;; esac
+printf 'owner = Sam\n' > "$T/.bones/config"
+c2="$( cd "$T" && HOME="$H" bash "$BONES" status )"
+case "$c2" in *"SAM'S call"*) ok "config: .bones/config overrides ~/.bonesrc" ;; *) no "config: .bones/config did not override" ;; esac
+rm -rf "$H" "$T"
+
+# ---- 19. log + stats read the trail back ----
+T="$(mktemp -d)"; scaffold "$T"
+( cd "$T" && b back -s 3 -r "council reopened the spec" >/dev/null )
+lg="$( cd "$T" && bash "$BONES" log )"
+case "$lg" in *"archived (superseded by back)"*"-- chain (ledger) --"*) ok "log: chain + archive shown" ;; *) no "log output incomplete" ;; esac
+st="$( cd "$T" && bash "$BONES" stats )"
+case "$st" in *"regressions (back)    : 1"*) ok "stats: regression counted" ;; *) no "stats: regression not counted" "$st" ;; esac
+rm -rf "$T"
+
 printf '\n== %s passed, %s failed ==\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
