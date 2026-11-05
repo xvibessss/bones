@@ -21,7 +21,7 @@ scaffold() { # scaffold <dir>
   local T="$1"
   ( cd "$T" && git init -q && echo x>f && git add -A && git -c user.email=t@t -c user.name=t commit -qm init >/dev/null )
   b init -t "$T" -n reg >/dev/null
-  ( cd "$T"
+  ( cd "$T" || exit
     b approve "brief interrogated, scope + non-goals pinned" >/dev/null && b next >/dev/null
     b approve -q "commit it" "kill-or-commit cleared" >/dev/null && b next >/dev/null
     echo "<html>spec</html>">spec.html
@@ -34,7 +34,7 @@ printf '\n== bones regression suite ==\n\n'
 
 # ---- 1. happy path: full pipeline advances and completes ----
 T="$(mktemp -d)"; scaffold "$T"
-( cd "$T"
+( cd "$T" || exit
   b build -c "true" -s spec.html >/dev/null 2>&1 && b next >/dev/null   # 5->6
   b approve "review clean; security N/A" >/dev/null && b next >/dev/null  # 6->7
   b approve "staging e2e green" >/dev/null && b next >/dev/null            # 7->8
@@ -74,7 +74,7 @@ mkchain() { # build clean chain through stage 3, echo dir
   local T; T="$(mktemp -d)"
   ( cd "$T" && git init -q && echo x>f && git add -A && git -c user.email=t@t -c user.name=t commit -qm i >/dev/null )
   b init -t "$T" -n atk >/dev/null
-  ( cd "$T"
+  ( cd "$T" || exit
     b approve "scope pinned" >/dev/null && b next >/dev/null
     b approve -q "go" "committed" >/dev/null && b next >/dev/null
     echo spec>spec.html && b approve -q "ok" -e spec.html "spec signed" >/dev/null )
@@ -91,7 +91,7 @@ T="$(mkchain)"; sed -i.bak '$d' "$T/.bones/ledger" 2>/dev/null || sed -i '' '$d'
 
 # ---- 5. back + redo keeps verifying ----
 T="$(mktemp -d)"; scaffold "$T"
-( cd "$T"
+( cd "$T" || exit
   bash "$BONES" back -s 3 -r "council reopened the spec" >/dev/null
   echo spec2>spec.html; bash "$BONES" approve -q "spec v2 ok" -e spec.html "reworked spec" >/dev/null )
 V "$T" && ok "back+redo: chain still verifies" || no "back+redo broke verify"
@@ -118,7 +118,7 @@ T="$(mktemp -d)"; ( cd "$T" && git init -q && echo x>f && git add -A && git -c u
 b init -t "$T" -T ops >/dev/null 2>&1
 ops_titles="$( cd "$T" && bash "$BONES" status )"
 case "$ops_titles" in *"Produce (acceptance check)"*) ok "template ops: stages loaded" ;; *) no "template ops: stages not loaded" ;; esac
-( cd "$T"
+( cd "$T" || exit
   b approve "brief pinned" >/dev/null && b next >/dev/null
   b approve -q "go" "committed" >/dev/null && b next >/dev/null
   echo plan>plan.md && b approve -q "plan ok" -e plan.md "plan signed" >/dev/null && b next >/dev/null
@@ -189,6 +189,49 @@ case "$init_out" in *"NOT a git repository"*) ok "init warns on non-git target" 
 ( cd "$T" && bash "$BONES" approve "scope pinned real note" >/dev/null )
 vout="$( cd "$T" && bash "$BONES" verify 2>&1 )"
 case "$vout" in *"UNANCHORED"*) ok "verify flags an unanchored (no-git) chain" ;; *) no "verify did not flag unanchored chain" ;; esac
+rm -rf "$T"
+
+# ---- 12. state & archive attacks: what the chain itself must refuse ----
+# Skipping stages by editing state.json (no gate record for the skipped stages).
+T="$(mkchain)"; ( cd "$T" && b next >/dev/null )                 # legit: now at stage 4
+perl -pi -e 's/"stage": 4/"stage": 9/' "$T/.bones/state.json"
+V "$T" && no "stage skip via state.json not caught" || ok "attack: stages skipped by editing state.json caught"; rm -rf "$T"
+# Deleting the gate record of a stage already passed.
+T="$(mkchain)"; ( cd "$T" && b next >/dev/null ); rm "$T/.bones/gates/2-kill-or-commit.ok"
+V "$T" && no "deleted passed gate not caught" || ok "attack: deleted record of a passed gate caught"; rm -rf "$T"
+# Resurrecting a gate revoked by `back` (copy it out of the archive, no re-approve).
+T="$(mkchain)"; ( cd "$T" && b next >/dev/null && b back -s 3 -r "spec reopened by council" >/dev/null )
+cp "$T"/.bones/gates/archive/*/3-spec.ok "$T/.bones/gates/"
+V "$T" && no "resurrected archived gate not caught" || ok "attack: gate restored from archive after back caught"; rm -rf "$T"
+# Un-killing by flipping the status in state.json instead of `bones back`.
+T="$(mkchain)"; ( cd "$T" && b kill -q "stop" -r "not worth building" >/dev/null )
+perl -pi -e 's/"status": "killed"/"status": "active"/' "$T/.bones/state.json"
+V "$T" && no "status un-kill via state.json not caught" || ok "attack: un-kill by editing state.json caught"; rm -rf "$T"
+# Deleting the kill record.
+T="$(mkchain)"; ( cd "$T" && b kill -q "stop" -r "not worth building" >/dev/null ); rm "$T/.bones/killed.ok"
+V "$T" && no "deleted killed.ok not caught" || ok "attack: deleted kill record caught"; rm -rf "$T"
+
+# ---- 13. build: config reviewer reaches loop.sh, an explicit -R wins ----
+T="$(mktemp -d)"; scaffold "$T"
+( cd "$T" && BONES_REVIEWER=bogus bash "$BONES" build -c "true" >/dev/null 2>&1 ) && no "config reviewer ignored by build" || ok "build: config reviewer reaches loop.sh"
+( cd "$T" && BONES_REVIEWER=bogus bash "$BONES" build -c "true" -R none >/dev/null 2>&1 ) && ok "build: explicit -R overrides config" || no "build: explicit -R did not override config"
+rm -rf "$T"
+
+# ---- 14. no-jq fallback parser, with a target path holding a comma ----
+P="$(mktemp -d)"; T="$P/my,proj"; mkdir "$T"
+( cd "$T" && git init -q && echo x>f && git add -A && git -c user.email=t@t -c user.name=t commit -qm i >/dev/null )
+BONES_NO_JQ=1 bash "$BONES" init -t "$T" >/dev/null 2>&1
+( cd "$T" && BONES_NO_JQ=1 bash "$BONES" approve "brief interrogated, scope pinned" >/dev/null && BONES_NO_JQ=1 bash "$BONES" next >/dev/null )
+nojq="$( cd "$T" && BONES_NO_JQ=1 bash "$BONES" status )"
+case "$nojq" in *"target=$T"*"stage: 2/10"*) ok "no-jq: state parsed (path with a comma)" ;; *) no "no-jq: state misparsed" ;; esac
+( cd "$T" && BONES_NO_JQ=1 bash "$BONES" verify >/dev/null 2>&1 ) && ok "no-jq: chain verifies" || no "no-jq: verify failed"
+rm -rf "$P"
+
+# ---- 15. CLI hygiene ----
+help_out="$(bash "$BONES" help)"
+case "$help_out" in *"Usage: bones"*) ok "help prints usage" ;; *) no "help output broken" ;; esac
+T="$(mktemp -d)"
+( bash "$BONES" init -t "$T" -n 'bad"name' >/dev/null 2>&1 ) && no "init accepted a quote in the name" || ok "init rejects a name that would break state.json"
 rm -rf "$T"
 
 printf '\n== %s passed, %s failed ==\n' "$pass" "$fail"

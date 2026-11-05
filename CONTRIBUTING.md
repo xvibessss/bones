@@ -16,9 +16,14 @@ one test suite. Changes that keep it that way are the easiest to merge.
 3. No new runtime dependencies. `jq` and `gpg` stay optional; anything else
    needs a strong reason in the PR description.
 4. Keep it portable: the suite must pass on both macOS (BSD tools, bash 3.2)
-   and Linux (GNU tools).
+   and Linux (GNU tools), with and without `jq` (`BONES_NO_JQ=1 bash scripts/test.sh`).
+5. Keep `shellcheck` clean:
 
-CI runs the suite on both platforms for every pull request.
+   ```bash
+   shellcheck -S warning scripts/*.sh install.sh completions/bones.bash
+   ```
+
+CI runs all of this on both platforms for every pull request.
 
 ## Reporting a bug
 
@@ -31,7 +36,8 @@ The point of bones is that a gate cannot be skipped or forged without the
 audit chain noticing. If you find a way to do it (tampering the ledger, a
 `.ok` file or a signature without `bones verify` catching it), please do not
 open a public issue. Use GitHub's private vulnerability reporting instead:
-the **Security** tab of this repository → **Report a vulnerability**.
+the **Security** tab of this repository → **Report a vulnerability**. See
+[SECURITY.md](SECURITY.md) for what's in scope.
 
 ## License
 

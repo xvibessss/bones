@@ -1,6 +1,6 @@
 #compdef bones bones.sh
 # zsh completion for bones. Enable by putting this dir on your fpath, e.g.:
-#   fpath=(~/.claude/skills/bones-pipeline/completions $fpath); autoload -U compinit; compinit
+#   fpath=(/path/to/bones/completions $fpath); autoload -U compinit; compinit
 _bones() {
   local -a subs
   subs=(
@@ -19,6 +19,8 @@ _bones() {
     'config:show resolved settings'
     'doctor:environment checks'
     'reset:wipe .bones state'
+    'help:show usage'
+    'version:print the version'
   )
   if (( CURRENT == 2 )); then
     _describe 'bones command' subs
@@ -29,7 +31,8 @@ _bones() {
                         '-T[template]:template:(code ops research)' '-H[strict owner gates]' '-f[force]' ;;
     approve) _arguments '-q[owner verbatim quote]:quote:' '*-e[evidence file]:file:_files' ;;
     build)   _arguments '-c[acceptance command]:cmd:' '-s[spec file]:file:_files' \
-                        '-r[rubric]:file:_files' '-R[reviewer]:reviewer:(auto codex gemini none)' ;;
+                        '-r[rubric]:file:_files' '-R[reviewer]:reviewer:(auto codex gemini none)' \
+                        '-n[max iterations]:n:' ;;
     back)    _arguments '-s[stage to return to]:stage:' '-r[reason]:reason:' ;;
     kill)    _arguments '-q[owner verbatim quote]:quote:' '-r[reason]:reason:' ;;
     reset)   _arguments '-f[force]' ;;

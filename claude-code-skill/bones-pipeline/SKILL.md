@@ -1,9 +1,9 @@
 ---
 name: bones-pipeline
-description: "Enforced-orchestration version of the owner's 9.5 ship-pipeline — a state-machine that MECHANICALLY enforces every gate instead of trusting an agent to follow prose. Use whenever the owner runs /bonespipeline, or says 'bones pipeline', 'enforced pipeline', 'gated build', 'run the pipeline properly', 'don't let me skip steps', or kicks off a big build where the gates must actually hold (kill-or-commit, spec sign-off, council, acceptance-verified build loop, review+security, staging-before-promote, prod smoke, operate/learn). Prefer this over plain ship-pipeline when discipline matters — it refuses to advance past an unsatisfied gate. Not for small one-file edits or quick questions."
+description: "Enforced version of the 10-stage ship-pipeline — a state-machine that MECHANICALLY enforces every gate instead of trusting an agent to follow prose. Use whenever the user runs /bonespipeline, or says 'bones pipeline', 'enforced pipeline', 'gated build', 'run the pipeline properly', 'don't let me skip steps', or kicks off a big build where the gates must actually hold (kill-or-commit, spec sign-off, council, acceptance-verified build loop, review+security, staging-before-promote, prod smoke, operate/learn). Prefer this over plain ship-pipeline when discipline matters — it refuses to advance past an unsatisfied gate. Not for small one-file edits or quick questions."
 ---
 
-# bones-pipeline — the 9.5 ship-pipeline, mechanically gated
+# bones-pipeline — the ship-pipeline, mechanically gated
 
 Same 10-stage pipeline as `ship-pipeline`, but the gates are **enforced by a state
 machine**, not by an agent remembering to honor prose. `bones` tracks the
@@ -17,7 +17,7 @@ Read `ship-pipeline/SKILL.md` for what each stage *does* and why. This skill is 
 
 | Type | Meaning | Satisfied by |
 |------|---------|--------------|
-| **owner** | the owner's call, not yours | `approve -q "<his verbatim words>" "<note>"` — the script refuses without a quote |
+| **owner** | the owner's call, not yours | `approve -q "<their verbatim words>" "<note>"` — the script refuses without a quote |
 | **agent** | your judgment call | `approve [-e <evidence_file>]... "<substantive note>"` — thin notes ("approved", "done") are rejected |
 | **auto** | machine-verified | `bones build …` → loop.sh real exit 0. `approve` is rejected here |
 | **step** | no gate | `next` advances and records the step |
@@ -27,10 +27,10 @@ Read `ship-pipeline/SKILL.md` for what each stage *does* and why. This skill is 
 Stages 2 (kill-or-commit), 3 (spec), 8 (promote), 10 (operate) are **the owner's
 decisions**. Before approving one you MUST:
 
-1. Present the stage's output and **ask the owner directly** (AskUserQuestion, or his
-   message in the conversation/iMessage).
-2. **Wait for his actual reply.** No reply = gate stays open. Say what's blocked and stop.
-3. Record his exact words: `bones approve -q "<verbatim>" "<what was decided>"`.
+1. Present the stage's output and **ask the owner directly** (AskUserQuestion, or
+   their message in the conversation).
+2. **Wait for their actual reply.** No reply = gate stays open. Say what's blocked and stop.
+3. Record their exact words: `bones approve -q "<verbatim>" "<what was decided>"`.
 
 The quote is **verbatim or nothing** — it goes on the permanent record and the owner can
 read it back. A fabricated or paraphrased quote is a falsified audit record, strictly
@@ -38,25 +38,24 @@ worse than a skipped gate.
 
 **Commit *or* kill.** `approve` means COMMIT — the build goes on. If the owner's decision at
 kill-or-commit (stage 2) or operate (stage 10) is to **STOP**, that is not an `approve`
-and not a `note` — it is `bones kill -q "<his verbatim words>" -r "<why>"`. Kill writes a
+and not a `note` — it is `bones kill -q "<their verbatim words>" -r "<why>"`. Kill writes a
 terminal link into the audit chain and sets the pipeline's status to **killed**, so a
 stopped build reads as *stopped*, never as a gate left hanging for an unreachable owner.
 `next`/`approve`/`build` then refuse; if the owner later reverses, `bones back -s <n> -r "…"`
-revives it. Recording a kill as a plain note (the old workaround) leaves the pipeline
-looking merely blocked — don't.
+revives it. Recording a kill as a plain note leaves the pipeline looking merely blocked — don't.
 
 **Rationalizations that don't fly** (each observed or predictable in real runs):
 
 | Excuse | Reality |
 |--------|---------|
 | "the owner said 'figure it out' / 'go ahead' at kickoff" | One authorization ≠ four sign-offs. Ask at each owner gate. |
-| "He's busy and this is low-stakes" | Then the gate stays open. Blocked-and-honest beats shipped-and-unauthorized. |
-| "I know what he'd say" | A prediction is not a quote. Ask. |
-| "He redirected me, that's basically approval" | A redirect that changes scope = `bones back` to the stage it invalidates, not an approve. |
+| "They're busy and this is low-stakes" | Then the gate stays open. Blocked-and-honest beats shipped-and-unauthorized. |
+| "I know what they'd say" | A prediction is not a quote. Ask. |
+| "They redirected me, that's basically approval" | A redirect that changes scope = `bones back` to the stage it invalidates, not an approve. |
 | "The work is genuinely done, the gate is a formality" | Done-ness is what *agent/auto* gates check. Owner gates check *consent*. |
 
-For ironclad runs: `init -H` (strict mode) makes owner gates require a real TTY —
-the owner types the approve himself; an agent shell physically cannot.
+For ironclad runs: `init -H` (strict mode) makes owner gates require an interactive
+terminal — the owner types the approve themselves; a non-interactive agent shell cannot.
 
 ## How to drive it
 
@@ -94,7 +93,7 @@ Typical flow each stage: **do the work (using the relevant skills per ship-pipel
   fake work sneaks in; a stage-1 note should state *what's missing*, not just what's wanted.
 - **Init in a git repo when you can.** On a non-git target the chain is still
   tamper-evident but **unanchored** — its commit-binding is empty and `bones seal` is
-  unavailable. `init` and `doctor` now warn about this; `git init` first for a fully
+  unavailable. `init` and `doctor` warn about this; `git init` first for a fully
   anchored trail.
 - **No test harness (e.g. a static site)?** The AUTO gate (stage 5) needs an acceptance
   command that exits 0. Copy `scripts/acceptance-example.sh` into the target as `check.sh`,
@@ -115,7 +114,7 @@ template as a `key<TAB>title<TAB>gate<TAB>evidence` TSV under `templates/`.
 
 Owner name and defaults come from `~/.bonesrc` (global) then `.bones/config`
 (per-pipeline), overridable by `BONES_OWNER` / `BONES_TEMPLATE` / `BONES_REVIEWER`
-/ `BONES_SIGN`. Keys: `owner` (default the owner), `template`, `reviewer`, `sign`.
+/ `BONES_SIGN`. Keys: `owner` (default "the owner"), `template`, `reviewer`, `sign`.
 `bones config` prints what resolved. So anyone can drop a `~/.bonesrc` and the
 owner-gate prompts speak their name.
 
@@ -146,7 +145,7 @@ not `approve` — that keeps a killed build distinct from a merely-open gate.
 ## Going backward is normal
 
 Council rejects the spec → `back -s 3`. Review findings reopen the build →
-`back -s 5`. the owner redirects promote → `back` to whatever stage his redirect
+`back -s 5`. The owner redirects promote → `back` to whatever stage their redirect
 invalidates. `back` archives the cleared gate records (never deletes) and demands a
 reason, so regressions are part of the story, not erased from it.
 
@@ -164,7 +163,7 @@ which is exactly why promote is an **owner** gate.
 - You're summarizing what the owner "effectively" said
 - You're rushing gates because the session is long or the work feels done
 - You marked promote approved when what actually happened was a redirect
-- the owner decided to **stop** and you reached for `note` or just left the gate open —
+- The owner decided to **stop** and you reached for `note` or just left the gate open —
   that's a `bones kill -q "<verbatim>" -r "<why>"`, so the record says *killed*, not *pending*
 
 ## The audit chain is tamper-evident
@@ -179,7 +178,8 @@ bones verify
 ```
 
 recomputes the whole chain and FAILS on any edit, insertion, deletion,
-truncation, or a forged (`touch`-ed) gate file. Run it before you trust a
+truncation, forged (`touch`-ed) or resurrected gate file, or a stage skipped
+by editing `state.json`. Run it before you trust a
 `.bones/` you didn't watch being built, and after every `back`. Commit `.bones/`
 with the build so git's own history anchors the chain against a full rewrite.
 
@@ -190,4 +190,5 @@ cryptographic signature they can't repudiate. Best-effort: no gpg → the gate i
 still recorded, just unsigned (with a warning).
 
 Never fake a gate. The `.bones/` dir is the audit trail — and now it can prove
-it wasn't tampered with.
+it wasn't tampered with — short of a full rewrite of `.bones/`, which is what
+committing it (`bones seal`) and GPG signing guard against.
