@@ -36,6 +36,8 @@ _bones() {
     back)    _arguments '-s[stage to return to]:stage:' '-r[reason]:reason:' ;;
     kill)    _arguments '-q[owner verbatim quote]:quote:' '-r[reason]:reason:' ;;
     reset)   _arguments '-f[force]' ;;
+    status)  _arguments '--json[machine-readable output]' ;;
+    verify)  _arguments '--strict[fail when a signed evidence file changed]' ;;
   esac
 }
 _bones "$@"

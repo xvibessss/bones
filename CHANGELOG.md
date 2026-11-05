@@ -4,6 +4,32 @@ All notable changes to bones. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## 1.3.0 — 2026-11-05
+
+### Security
+- `bones verify` re-hashes every evidence file attached with `approve -e`. A
+  spec edited after the owner signed it, or an evidence file that disappeared, is
+  reported as **evidence drift** — a warning by default, a failure with the new
+  `bones verify --strict`. Until now the sha256 was recorded but never checked.
+
+### Changed
+- `approve -e` records evidence inside the project relative to its root (not to
+  the directory approve ran from), so `verify` finds it from anywhere and on any
+  clone. Evidence must be a regular file: a directory used to be accepted with an
+  empty hash.
+
+### Fixed
+- A project that was **moved or cloned elsewhere** (a CI checkout, a teammate's
+  machine) kept using the absolute path recorded at `init`: evidence was looked
+  up — and `build`, `seal` and the git binding ran — at the old location. bones
+  now always works on the directory that holds `.bones/`.
+
+### Added
+- `bones status --json`: stage, current gate, lifecycle status and chain head
+  for scripts, agents and CI.
+- Completions for `status --json` and `verify --strict`; the README's CI job
+  uses `verify --strict` (75 checks).
+
 ## 1.2.0 — 2026-11-05
 
 ### Security

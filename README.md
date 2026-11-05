@@ -112,6 +112,12 @@ exits non-zero on any of these:
   is internally consistent (see below);
 - (with `sign=1`) a GPG signature on owner consent that no longer validates.
 
+It also re-hashes every evidence file attached with `approve -e`. A spec edited
+after the owner signed it, or a review file that vanished, is reported as
+**evidence drift**: a warning by default (the chain itself is intact; the artifact
+on disk just isn't the one that was signed), a failure with `bones verify --strict`.
+Evidence inside the project is recorded relative to it, so a fresh clone finds it.
+
 **Seal as you go.** `bones seal` verifies the chain, then commits `.bones/` to the
 target repo. From then on `verify` reads every version of the ledger in git
 history and requires each one to be a prefix of the live ledger: the chain only
@@ -140,7 +146,7 @@ consent, GPG signatures made with a key the agent doesn't hold. In short:
 bones keeps an honest agent honest and makes a dishonest one leave evidence. It
 is not a sandbox: it can't stop an agent with full shell access from lying in the
 *content* of a note — which is why owner gates demand verbatim quotes and agent
-gates take `-e` evidence files pinned by sha256.
+gates take `-e` evidence files pinned by sha256 (and re-checked by `verify`).
 
 ### Verify in CI
 
@@ -160,14 +166,19 @@ jobs:
           fetch-depth: 0   # full history: verify compares every sealed ledger
       - name: Verify the bones audit chain
         run: |
-          git clone --quiet --depth 1 --branch v1.2.0 https://github.com/xvibessss/bones "$RUNNER_TEMP/bones"
-          bash "$RUNNER_TEMP/bones/scripts/bones.sh" verify
+          git clone --quiet --depth 1 --branch v1.3.0 https://github.com/xvibessss/bones "$RUNNER_TEMP/bones"
+          bash "$RUNNER_TEMP/bones/scripts/bones.sh" verify --strict
 ```
 
 `verify` finds `.bones/` by walking up from the working directory; if your
 pipeline lives in a subdirectory, add `working-directory: <that dir>` to the
-step. Pinning a tag (`--branch v1.2.0`) keeps the verifier itself from changing
-under you.
+step. `--strict` also fails the job when a signed evidence file changed; drop it
+if your evidence lives outside the repository. Pinning a tag (`--branch v1.3.0`)
+keeps the verifier itself from changing under you.
+
+Scripts and agents can read the state without parsing text: `bones status --json`
+prints the stage, the current gate (`key`, `title`, `gate`, `satisfied`), the
+lifecycle `status` (`active`, `killed` or `complete`) and the chain head.
 
 ---
 
@@ -176,13 +187,13 @@ under you.
 | | |
 |---|---|
 | `init -t <dir> [-n name] [-T template] [-H]` | start; `-T` picks the stage set, `-H` = strict owner gates |
-| `status` | where am I, which gate is open, time in stage |
+| `status [--json]` | where am I, which gate is open, time in stage (`--json` for scripts) |
 | `approve [-q quote] [-e file]... "note"` | satisfy an owner/agent gate |
 | `build -c "cmd" -s spec [-r rubric] [-R reviewer]` | the auto gate — passes on exit 0 |
 | `next` / `back -s N -r "why"` | advance (if satisfied) / regress (keeps audit) |
 | `kill -q "quote" -r "why"` | owner STOPS the build — terminal chain link, status=killed |
 | `note "text"` · `log` | journal an observation · full audit trail |
-| `verify` | recompute the tamper-evident chain |
+| `verify [--strict]` | recompute the chain + re-hash evidence (`--strict`: drift fails) |
 | `seal` | verify, then git-commit `.bones/` — later `verify`s check the chain only grew |
 | `stats` | per-stage time + regressions |
 | `config` · `doctor` | resolved settings · environment checks |
@@ -252,10 +263,11 @@ Commit `.bones/` alongside your work — it's the audit trail.
 bash scripts/test.sh
 ```
 
-63 checks (60 when `gpg` isn't installed): happy path, gate refusals, the build
+75 checks (72 when `gpg` isn't installed): happy path, gate refusals, the build
 gate, twelve tamper attacks on the ledger, gate files, `state.json` and sealed
 history, back+redo, seal and explicit restarts, strict mode, concurrency,
-templates, config files, kill (stop/refusals/tamper/revive), log and stats, the
+templates, config files, kill (stop/refusals/tamper/revive), evidence drift,
+`status --json`, moved/cloned projects, log and stats, the
 non-git warning, the jq-less fallback parser, and GPG signing. CI runs it on Linux and
 macOS (bash 3.2), with and without `jq`, plus `shellcheck`.
 

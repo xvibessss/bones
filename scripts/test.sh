@@ -293,5 +293,49 @@ st="$( cd "$T" && bash "$BONES" stats )"
 case "$st" in *"regressions (back)    : 1"*) ok "stats: regression counted" ;; *) no "stats: regression not counted" "$st" ;; esac
 rm -rf "$T"
 
+# ---- 20. evidence pins: a signed -e file that changes or vanishes is reported ----
+T="$(mkchain)"     # stage 3 was approved with -e spec.html
+ev0="$( cd "$T" && bash "$BONES" verify 2>&1 )"
+case "$ev0" in *"1 evidence file(s) still match"*) ok "evidence: intact file reported as matching" ;; *) no "evidence: intact file not reported" "$ev0" ;; esac
+echo "spec silently edited after sign-off" > "$T/spec.html"
+ev1="$( cd "$T" && bash "$BONES" verify 2>&1 )"; ev1rc=$?
+case "$ev1rc:$ev1" in 0:*"EVIDENCE DRIFT"*"spec.html CHANGED"*) ok "evidence: changed file warned (chain still verifies)" ;; *) no "evidence: changed file not warned" "$ev1" ;; esac
+( cd "$T" && bash "$BONES" verify --strict >/dev/null 2>&1 ) && no "verify --strict passed with drifted evidence" || ok "evidence: verify --strict fails on a changed file"
+rm "$T/spec.html"
+ev2="$( cd "$T" && bash "$BONES" verify --strict 2>&1 )"
+case "$ev2" in *"spec.html is MISSING"*) ok "evidence: deleted file reported as missing" ;; *) no "evidence: deleted file not reported" "$ev2" ;; esac
+rm -rf "$T"
+# recorded relative to the target, whatever directory approve ran from
+T="$(mktemp -d)"; scaffold "$T"
+( cd "$T" && b build -c "true" >/dev/null 2>&1 && b next >/dev/null
+  mkdir -p "docs/a b" && echo review > "docs/a b/review.md"
+  cd "docs/a b" && b approve -e review.md "review clean; security pass done" >/dev/null 2>&1 )
+grep -q '^evidence: docs/a b/review.md (sha256:' "$T/.bones/gates/6-review-security.ok" && ok "evidence: path recorded relative to the target" || no "evidence: path not target-relative"
+( cd "$T" && bash "$BONES" verify --strict >/dev/null 2>&1 ) && ok "evidence: found again from the target root" || no "evidence: target-relative path not resolved"
+( cd "$T" && mkdir -p d && b approve -e d "a directory is not evidence" >/dev/null 2>&1 ) && no "evidence: a directory was accepted" || ok "evidence: a directory is refused"
+rm -rf "$T"
+
+# a moved or cloned project (CI checkout) resolves evidence and target where it IS now
+T="$(mkchain)"; T2="$(mktemp -d)/moved"; mv "$T" "$T2"
+( cd "$T2" && bash "$BONES" verify --strict >/dev/null 2>&1 ) && ok "moved project: verifies at its new location" || no "moved project: verify failed after a move"
+case "$( cd "$T2" && bash "$BONES" status )" in *"target=$T2"*) ok "moved project: status shows the real location" ;; *) no "moved project: status shows the stale path" ;; esac
+mkdir -p "$T"; echo spec > "$T/spec.html"   # decoy with the SIGNED content at the old path
+echo "edited after the move" > "$T2/spec.html"
+( cd "$T2" && bash "$BONES" verify --strict >/dev/null 2>&1 ) && no "moved project: drift checked at the old path" || ok "moved project: drift checked at the new path"
+rm -rf "$T" "$(dirname "$T2")"
+
+# ---- 21. status --json: machine-readable state for agents and CI ----
+T="$(mkchain)"
+js="$( cd "$T" && bash "$BONES" status --json )"
+if command -v python3 >/dev/null 2>&1; then
+  printf '%s' "$js" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["status"]=="active" and d["stage"]==3 and d["current"]["key"]=="spec" and d["current"]["satisfied"] is True' 2>/dev/null \
+    && ok "status --json: valid JSON with stage, gate and satisfaction" || no "status --json: wrong or invalid JSON" "$js"
+else
+  case "$js" in *'"stage": 3,'*'"key": "spec"'*'"satisfied": true'*) ok "status --json: stage, gate and satisfaction" ;; *) no "status --json: wrong output" "$js" ;; esac
+fi
+( cd "$T" && b kill -q "stop" -r "not worth it" >/dev/null )
+case "$( cd "$T" && bash "$BONES" status --json )" in *'"status": "killed"'*) ok "status --json: reports killed" ;; *) no "status --json: killed not reported" ;; esac
+rm -rf "$T"
+
 printf '\n== %s passed, %s failed ==\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

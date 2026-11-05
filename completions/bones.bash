@@ -17,6 +17,8 @@ _bones_complete() {
     back)    COMPREPLY=( $(compgen -W "-s -r" -- "$cur") ) ;;
     kill)    COMPREPLY=( $(compgen -W "-q -r" -- "$cur") ) ;;
     reset)   COMPREPLY=( $(compgen -W "-f" -- "$cur") ) ;;
+    status)  COMPREPLY=( $(compgen -W "--json" -- "$cur") ) ;;
+    verify)  COMPREPLY=( $(compgen -W "--strict" -- "$cur") ) ;;
   esac
 }
 complete -F _bones_complete bones bones.sh

@@ -39,7 +39,7 @@
 #
 set -uo pipefail
 
-BONES_VERSION="1.2.0"
+BONES_VERSION="1.3.0"
 
 # Resolve this script's real directory (following symlinks, e.g. ~/.local/bin/bones),
 # so we can find the shipped loop.sh and templates/ regardless of how bones was invoked.
@@ -85,6 +85,7 @@ EVIDENCE_STAGES=" 3 6 7 "
 NSTAGES=${#STAGE_KEYS[@]}
 
 die() { printf 'bones: %s\n' "$1" >&2; exit 1; }
+NL_=$'\n'
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # --- configuration ---------------------------------------------------------
@@ -202,6 +203,10 @@ write_state() { # write_state <dir> <name> <target> <stage> <created> <strict>
 }
 
 state_get() { json_get "$BONES_DIR/state.json" "$1"; }
+# The project a pipeline belongs to is the directory holding its .bones/ — not the
+# path recorded in state.json at init, which goes stale when the project is moved
+# or cloned elsewhere (a CI checkout, a teammate's machine).
+target_dir() { [ -n "${BONES_DIR:-}" ] && (cd "${BONES_DIR%/*}" && pwd); }
 
 journal() { printf '%s | %s | %s\n' "$(now)" "$1" "$2" >> "$BONES_DIR/journal.log"; }
 
@@ -235,7 +240,7 @@ atomic_write() { # atomic_write <dest>  (content on stdin) — never leaves a ha
 }
 
 git_ref() { # short commit + clean/dirty for the target repo, or "no-git"
-  local t; t="$(state_get target 2>/dev/null)"; [ -n "$t" ] || t="$PWD"
+  local t; t="$(target_dir 2>/dev/null)"; [ -n "$t" ] || t="$PWD"
   if command -v git >/dev/null 2>&1 && git -C "$t" rev-parse --git-dir >/dev/null 2>&1; then
     local sha dirty
     sha="$(git -C "$t" rev-parse --short HEAD 2>/dev/null || echo nocommit)"
@@ -301,6 +306,28 @@ ledger_append() {
   hash="$(printf '%s' "$canon" | sha_stdin)"
   printf '%s|%s\n' "$canon" "$hash" >> "$BONES_DIR/ledger"
   set_head "$hash"
+}
+
+# Evidence paths are recorded relative to the pipeline's target when the file lives
+# inside it (so `verify` can find it from anywhere, on any clone), absolute otherwise.
+evidence_rel() { # evidence_rel <path> -> path as recorded in the gate file
+  local f="$1" abs t
+  abs="$(cd "$(dirname "$f")" && pwd)/$(basename "$f")"
+  t="$(target_dir)"
+  case "$abs" in "$t"/*) printf '%s' "${abs#"$t"/}" ;; *) printf '%s' "$abs" ;; esac
+}
+evidence_abs() { # evidence_abs <recorded path> -> where to look for it now
+  case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$(target_dir)" "$1" ;; esac
+}
+# Lines "evidence: <path> (sha256:<hex>)" of a gate file, as "<hex> <path>".
+evidence_of() { # evidence_of <gate_file>
+  local line re='^evidence: (.*) \(sha256:([0-9a-f]+)\)$'
+  while IFS= read -r line; do
+    [[ $line =~ $re ]] && printf '%s %s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[1]}"
+  done < "$1"
+}
+json_str() { # json_str <text> -> a JSON string literal
+  printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\t\n' '  ')"
 }
 
 gate_rel() { printf 'gates/%s-%s.ok' "$1" "${STAGE_KEYS[$(( $1 - 1 ))]}"; }
@@ -415,8 +442,13 @@ cmd_init() {
 cmd_status() {
   BONES_DIR="${BONES_DIR:-$(find_bones)}" || die "no .bones here — run 'bones init -t <dir>' first"
   bootstrap
+  case "${1:-}" in
+    --json) status_json; return ;;
+    "") ;;
+    *) die "status takes no argument but --json" ;;
+  esac
   local cur name target strict created updated
-  cur="$(state_get stage)"; name="$(state_get name)"; target="$(state_get target)"; strict="$(state_get strict)"
+  cur="$(state_get stage)"; name="$(state_get name)"; target="$(target_dir)"; strict="$(state_get strict)"
   created="$(state_get created)"; updated="$(state_get updated)"
   printf '== bones pipeline: %s ==\n target=%s\n owner=%s  strict=%s\n' "$name" "$target" "$OWNER" "${strict:-false}"
   chain_unanchored && printf ' audit: ⚠ UNANCHORED (no-git) — tamper-evident but not committed; `git init` + `bones seal` to anchor.\n'
@@ -453,6 +485,36 @@ cmd_status() {
       step)  printf 'STEP — do stage %s, then `bones next` (no approval needed).\n' "$cur" ;;
     esac
   fi
+}
+
+# Machine-readable status for agents and CI. Stable keys; null when not applicable.
+status_json() {
+  local cur status gt="" key="" title="" sat=false strict
+  cur="$(state_get stage)"; strict="$(state_get strict)"
+  if is_killed; then status=killed
+  elif [ "$cur" -gt "$NSTAGES" ] 2>/dev/null; then status=complete
+  else status=active; fi
+  if [ "$cur" -le "$NSTAGES" ] 2>/dev/null; then
+    key="${STAGE_KEYS[$((cur-1))]}"; title="${STAGE_TITLES[$((cur-1))]}"; gt="${STAGE_GATE[$((cur-1))]}"
+    gate_satisfied "$cur" && sat=true
+  fi
+  printf '{\n'
+  printf '  "version": %s,\n' "$(json_str "$BONES_VERSION")"
+  printf '  "name": %s,\n' "$(json_str "$(state_get name)")"
+  printf '  "target": %s,\n' "$(json_str "$(target_dir)")"
+  printf '  "status": "%s",\n' "$status"
+  printf '  "strict": %s,\n' "$([ "$strict" = "true" ] && echo true || echo false)"
+  printf '  "stage": %s,\n' "$cur"
+  printf '  "stages": %s,\n' "$NSTAGES"
+  if [ -n "$key" ]; then
+    printf '  "current": {"key": %s, "title": %s, "gate": "%s", "satisfied": %s},\n' \
+      "$(json_str "$key")" "$(json_str "$title")" "$gt" "$sat"
+  else
+    printf '  "current": null,\n'
+  fi
+  printf '  "owner": %s,\n' "$(json_str "$OWNER")"
+  printf '  "head": "%s"\n' "$(chain_head)"
+  printf '}\n'
 }
 
 cmd_approve() {
@@ -496,7 +558,8 @@ cmd_approve() {
     local f
     for f in "${evidence[@]}"; do
       [ -e "$f" ] || die "evidence file not found: $f"
-      ev_lines="${ev_lines}evidence: $f (sha256:$(sha_of "$f"))
+      [ -f "$f" ] || die "evidence must be a file (got a directory or special file): $f"
+      ev_lines="${ev_lines}evidence: $(evidence_rel "$f") (sha256:$(sha_of "$f"))
 "
     done
   elif printf '%s' "$EVIDENCE_STAGES" | grep -q " $cur "; then
@@ -525,7 +588,7 @@ cmd_build() {
   acquire_lock
   bootstrap
   local cur target
-  cur="$(state_get stage)"; target="$(state_get target)"
+  cur="$(state_get stage)"; target="$(target_dir)"
   is_killed && die "pipeline was KILLED — no build to run. Revive with 'bones back -s <n> -r \"<reason>\"' if $OWNER reverses."
   [ "$cur" -le "$NSTAGES" ] 2>/dev/null || die "pipeline already complete"
   [ "${STAGE_GATE[$((cur-1))]}" = "auto" ] || die "build is only valid on an AUTO (machine-verified) gate — stage $cur is a ${STAGE_GATE[$((cur-1))]} gate. Advance to the build stage first."
@@ -556,7 +619,7 @@ cmd_next() {
   bootstrap
   local cur name target created strict updated
   cur="$(state_get stage)"; name="$(state_get name)"
-  target="$(state_get target)"; created="$(state_get created)"; strict="$(state_get strict)"
+  target="$(target_dir)"; created="$(state_get created)"; strict="$(state_get strict)"
   updated="$(state_get updated)"
   is_killed && die "pipeline was KILLED — it does not advance. Revive with 'bones back -s <n> -r \"<reason>\"' if $OWNER reverses."
   [ "$cur" -le "$NSTAGES" ] 2>/dev/null || die "pipeline already complete"
@@ -604,7 +667,7 @@ cmd_back() {
   [ -n "$reason" ] || die "back needs -r \"<reason>\" — regressions are part of the audit trail"
   local cur name target created strict
   cur="$(state_get stage)"; name="$(state_get name)"
-  target="$(state_get target)"; created="$(state_get created)"; strict="$(state_get strict)"
+  target="$(target_dir)"; created="$(state_get created)"; strict="$(state_get strict)"
   [ "$to" -ge 1 ] && [ "$to" -le "$NSTAGES" ] || die "stage must be 1..$NSTAGES"
   [ "$to" -le "$cur" ] || die "back only goes backward (you are at stage $cur); use gates + next to go forward"
   # Archive (don't delete) every gate record from the target stage on — audit trail survives.
@@ -713,6 +776,12 @@ cmd_log() {
 }
 
 cmd_verify() {
+  local strict_ev=0
+  case "${1:-}" in
+    --strict) strict_ev=1 ;;
+    "") ;;
+    *) die "verify takes no argument but --strict" ;;
+  esac
   BONES_DIR="$(find_bones)" || die "no .bones here — run 'bones init' first"
   bootstrap
   local ledger="$BONES_DIR/ledger"
@@ -863,6 +932,32 @@ cmd_verify() {
     rm -f "$ctmp"
   fi
 
+  # Pass 6 — evidence: every file attached with `approve -e` must still hash to what
+  # was signed. The gate record itself is intact either way (pass 3), so drift is a
+  # warning by default — the artifact someone signed off is no longer the one on
+  # disk — and a failure with --strict.
+  local drift="" ev_sha ev_path ev_abs ev_n=0
+  for i in $(seq 1 "$NSTAGES"); do
+    gf="$(gate_file "$i")"; [ -f "$gf" ] || continue
+    while read -r ev_sha ev_path; do
+      [ -n "$ev_sha" ] || continue
+      ev_n=$((ev_n+1)); ev_abs="$(evidence_abs "$ev_path")"
+      if [ ! -f "$ev_abs" ]; then
+        drift="${drift}stage $i: $ev_path is MISSING (signed sha256 ${ev_sha:0:12}…)${NL_}"
+      elif [ "$(sha_of "$ev_abs")" != "$ev_sha" ]; then
+        drift="${drift}stage $i: $ev_path CHANGED since it was signed (was ${ev_sha:0:12}…, now $(sha_of "$ev_abs" | cut -c1-12)…)${NL_}"
+      fi
+    done <<EOF
+$(evidence_of "$gf")
+EOF
+  done
+  if [ -n "$drift" ] && [ "$strict_ev" -eq 1 ]; then
+    printf 'bones: ✗ EVIDENCE DRIFT (--strict): signed artifacts no longer match what is on disk:\n' >&2
+    printf '%s' "$drift" | sed 's/^/         /' >&2
+    printf '       Re-approve the stage with the new file (after `bones back` if it was passed), or restore the signed one.\n' >&2
+    exit 1
+  fi
+
   printf 'bones: ✓ CHAIN VERIFIED — %s links intact and in order; head %s…\n' "$n" "$(printf '%s' "$prev" | cut -c1-12)"
   printf '       every gate record is unaltered, and every live gate file matches its signature.\n'
   if [ "$signed" -gt 0 ]; then printf '       %s owner gate(s) carry a valid GPG signature.\n' "$signed"; fi
@@ -876,6 +971,13 @@ cmd_verify() {
     printf '       ⚠ UNANCHORED: no link is bound to a git commit, so the chain is\n'
     printf '         tamper-evident but not externally anchored against a full rewrite.\n'
     printf '         Run inside a git repo and `bones seal` to anchor it in git history.\n'
+  fi
+  if [ -n "$drift" ]; then
+    printf '       ⚠ EVIDENCE DRIFT — signed artifacts no longer match what is on disk:\n'
+    printf '%s' "$drift" | sed 's/^/         /'
+    printf '         (`bones verify --strict` fails on this.)\n'
+  elif [ "$ev_n" -gt 0 ]; then
+    printf '       %s evidence file(s) still match their signed sha256.\n' "$ev_n"
   fi
   is_killed && printf '       ☠ pipeline status: KILLED (stopped by owner decision).\n'
   return 0
@@ -944,7 +1046,7 @@ cmd_doctor() {
     # actually anchors the chain and enables `seal`, not merely the git binary.
     local _bd _tgt
     if _bd="$(find_bones 2>/dev/null)"; then
-      _tgt="$(json_get "$_bd/state.json" target 2>/dev/null)"; [ -n "$_tgt" ] || _tgt="$PWD"
+      _tgt="${_bd%/*}"
       if git -C "$_tgt" rev-parse --git-dir >/dev/null 2>&1; then
         printf '  ✓ target is a git repo — commit binding + `bones seal` available\n'
       else
@@ -971,7 +1073,7 @@ cmd_doctor() {
 cmd_seal() {
   BONES_DIR="$(find_bones)" || die "no .bones here — run 'bones init' first"
   acquire_lock; bootstrap
-  local target; target="$(state_get target)"
+  local target; target="$(target_dir)"
   command -v git >/dev/null 2>&1 || die "seal needs git — it commits .bones/ as the external anchor"
   git -C "$target" rev-parse --git-dir >/dev/null 2>&1 || die "target is not a git repo — nothing to anchor into"
   # Never anchor a broken chain. (subshell so verify's internal exit can't kill us)
@@ -1011,7 +1113,7 @@ Usage: bones <command> [options]
 Pipeline
   init -t <dir> [-n name] [-T template] [-H] [-f]
                          start a pipeline in <dir> (-T code|ops|research, -H strict owner gates)
-  status                 where am I, which gate is open, what to do next (default command)
+  status [--json]        where am I, which gate is open, what to do next (default command)
   approve [-q "quote"] [-e file]... "note"
                          satisfy the current owner/agent gate (owner gates need -q)
   build -c "cmd" [-s spec] [-r rubric] [-R auto|codex|gemini|none] [-n max]
@@ -1024,7 +1126,8 @@ Pipeline
 Audit
   note "text"            journal an observation
   log                    full audit trail: gates, archive, chain, journal
-  verify                 recompute the tamper-evident chain (exit 1 if anything was faked)
+  verify [--strict]      recompute the tamper-evident chain (exit 1 if anything was faked;
+                         --strict also fails when a signed evidence file changed)
   seal                   verify, then git-commit .bones/ (the external anchor)
   stats                  per-stage time and regressions
 
@@ -1043,7 +1146,7 @@ BONES_DIR="${BONES_DIR:-}"
 sub="${1:-status}"; shift || true
 case "$sub" in
   init)    cmd_init "$@" ;;
-  status)  cmd_status ;;
+  status)  cmd_status "$@" ;;
   approve) cmd_approve "$@" ;;
   build)   cmd_build "$@" ;;
   next)    cmd_next ;;
@@ -1051,7 +1154,7 @@ case "$sub" in
   kill)    cmd_kill "$@" ;;
   note)    cmd_note "$@" ;;
   log)     cmd_log ;;
-  verify)  cmd_verify ;;
+  verify)  cmd_verify "$@" ;;
   seal)    cmd_seal ;;
   stats)   cmd_stats ;;
   config)  cmd_config ;;
