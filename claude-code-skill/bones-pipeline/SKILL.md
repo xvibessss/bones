@@ -73,7 +73,7 @@ bones back -s <stage> -r "<reason>"         # regress (archives gate records, ke
 bones note "<text>"                         # journal an observation mid-stage
 bones log                                   # full audit trail: gates + archive + journal
 bones verify                                # recompute the tamper-evident hash chain
-bones seal                                  # git-commit .bones/ (external anchor; verifies first)
+bones seal                                  # verify, then git-commit .bones/ (later verifies check it only grew)
 bones stats                                 # per-stage time + regressions from the journal
 bones config                                # show resolved owner/template/reviewer/sign
 bones doctor                                # environment checks (sha, git, loop.sh, gpg, PATH)
@@ -181,7 +181,9 @@ recomputes the whole chain and FAILS on any edit, insertion, deletion,
 truncation, forged (`touch`-ed) or resurrected gate file, or a stage skipped
 by editing `state.json`. Run it before you trust a
 `.bones/` you didn't watch being built, and after every `back`. Commit `.bones/`
-with the build so git's own history anchors the chain against a full rewrite.
+with the build (`bones seal`): `verify` then checks that every sealed version of
+the ledger is a prefix of the live one, so even a consistent rewrite is caught.
+Seal after each owner gate — what is sealed can no longer be quietly redone.
 
 With `sign=1` in config, owner-gate consent is additionally **GPG-signed**: the
 chain head at each owner approval gets a detached signature under `.bones/sigs/`,
@@ -190,5 +192,5 @@ cryptographic signature they can't repudiate. Best-effort: no gpg → the gate i
 still recorded, just unsigned (with a warning).
 
 Never fake a gate. The `.bones/` dir is the audit trail — and now it can prove
-it wasn't tampered with — short of a full rewrite of `.bones/`, which is what
-committing it (`bones seal`) and GPG signing guard against.
+it wasn't tampered with — short of a rewrite of `.bones/` before it was ever
+sealed, which is why you seal early and, for owner consent, GPG-sign.

@@ -27,9 +27,11 @@ You'll get an answer within a week. Fixes ship with a regression check in
 
 ## Out of scope (documented limits)
 
-- A full, consistent rewrite of `.bones/` by someone with write access: the
-  chain is hashed, not keyed. Sealing it into git history (`bones seal` + push)
-  and GPG signing are the defences; see "Threat model" in the README.
+- A full, consistent rewrite of `.bones/` *before it was ever sealed*, or a
+  rewrite of git history itself, by someone with write access: the chain is
+  hashed, not keyed. Sealing early (`bones seal`), pushing the seals to a
+  protected branch and GPG signing are the defences; see "Threat model" in the
+  README. (A rewrite *after* a seal that `verify` misses **is** in scope.)
 - An agent with full shell access writing a false *note*: bones records what it
   is told, pins evidence files by sha256, and demands verbatim owner quotes.
 - `bones build` runs the acceptance command you give it, by design.

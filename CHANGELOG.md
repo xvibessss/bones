@@ -4,6 +4,25 @@ All notable changes to bones. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## 1.2.0 — 2026-11-05
+
+### Security
+- `bones verify` now checks the chain against **git history**: every version of
+  the ledger committed by `bones seal` (or by hand) must be a prefix of the live
+  ledger. A full, internally consistent rewrite of `.bones/` after a seal — the
+  one attack the hashes alone couldn't see — now fails with `CHAIN REWRITTEN`.
+- `bones init -f` refuses to replace a sealed pipeline. Starting over is
+  explicit: `bones reset -f`, commit the removal, `bones init`; `verify` then
+  reports the restart and its commit.
+
+### Added
+- `verify` reports how many sealed versions anchor the chain, or that it isn't
+  sealed yet.
+- README: "Verify in CI" — a ready-to-copy GitHub Actions job for projects that
+  use bones.
+- Tests for seal, explicit restarts, strict mode, config files, `log` and
+  `stats` (63 checks).
+
 ## 1.1.0 — 2026-11-05
 
 ### Security
