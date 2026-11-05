@@ -1,17 +1,17 @@
 ---
 name: ship-pipeline
-description: "the owner's 9.5 ship-pipeline — the 10-stage discipline for taking a big build from raw idea to shipped-and-operating, described in prose. Use when the owner says 'ship-pipeline', 'run the pipeline', or wants the reference for what each stage does and why. For MECHANICAL enforcement of the gates (refuses to skip a stage), use bones-pipeline instead — this skill is the reference it drives."
+description: "The 10-stage ship-pipeline — discipline for taking a big build from raw idea to shipped-and-operating, described in prose. Use when the user says 'ship-pipeline', 'run the pipeline', or wants the reference for what each stage does and why. For MECHANICAL enforcement of the gates (refuses to skip a stage), use bones-pipeline instead — this skill is the reference it drives."
 ---
 
-# ship-pipeline — the 9.5 build discipline (reference)
+# ship-pipeline — the build discipline (reference)
 
 Ten stages from raw idea to a thing that runs in production and teaches you
 something. This file explains **what each stage does and why**. To run it with
 the gates *mechanically enforced* (a state machine that refuses to advance past
 an unsatisfied gate, and distinguishes owner vs. agent vs. auto vs. step gates),
 use the **`bones-pipeline`** skill — `bones` is the driver; this is
-the map it follows. `scripts/loop.sh` here is the acceptance-gated build loop
-that `bones build` invokes at stage 5.
+the map it follows. `scripts/loop.sh` in the bones repo is the acceptance-gated build
+loop that `bones build` invokes at stage 5.
 
 ## The 10 stages
 
@@ -28,7 +28,7 @@ kill it or commit. Killing here is a win — it's the cheapest place to stop.
 **3. Spec sign-off** *(OWNER gate — the owner's call)*
 Write the spec as a self-contained HTML doc: scope, non-goals, acceptance
 criteria, the shape of the solution. Acceptance criteria must be **executable or
-checkable** — they become stage 5's gate. the owner signs off the spec before code.
+checkable** — they become stage 5's gate. The owner signs off the spec before code.
 
 **4. Council / second-pass critique** *(agent gate)*
 Adversarial read of the spec *before* building. Run it past a council (multiple
@@ -59,7 +59,7 @@ anything goes live. Attach the staging log or screenshot as evidence.
 
 **8. Promote + production smoke test** *(OWNER gate — the owner's call)*
 The irreversible step: promote to production, then run a smoke test against prod.
-the owner gives the explicit go; a redirect that changes scope is `bones back`, not an
+The owner gives the explicit go; a redirect that changes scope is `bones back`, not an
 approve. This is an owner gate precisely because it's the point of no easy return.
 
 **9. Present** *(step)*

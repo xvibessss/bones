@@ -1,5 +1,10 @@
 # bones — the gated, tamper-evident ship pipeline
 
+[![CI](https://github.com/xvibessss/bones/actions/workflows/ci.yml/badge.svg)](https://github.com/xvibessss/bones/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![bash](https://img.shields.io/badge/bash-3.2%2B-4EAA25?logo=gnubash&logoColor=white)
+![dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)
+
 `bones` turns a checklist you *could* skip into a **state machine that refuses to
 advance** past an unsatisfied gate — and records every gate into an append-only,
 hash-chained ledger you can later **prove** wasn't faked.
@@ -26,7 +31,8 @@ cd bones
 ```
 
 `install.sh` symlinks the `bones` command onto your `PATH` (`~/.local/bin` by
-default) — it touches nothing else and is safe to re-run. If that dir isn't on
+default) — it touches nothing else and is safe to re-run. `./install.sh --uninstall`
+removes the link. If that dir isn't on
 your `PATH` yet, the script tells you the one line to add to your shell profile.
 
 Then check your environment and make it yours:
@@ -76,8 +82,8 @@ Every stage is the same rhythm: **do the work → satisfy the gate → `bones ne
 | **step** | no gate | `next` advances and records it |
 
 - **Owner gates** need *verbatim* consent: `bones approve -q "ship it" "committed"`.
-  Strict mode (`init -H`) additionally requires a real terminal, so an automated
-  agent physically can't satisfy them.
+  Strict mode (`init -H`) additionally requires an interactive terminal, so an
+  agent running commands through a non-interactive shell can't satisfy them.
 - **The build gate** opens only on a green acceptance check. No sign-off substitutes.
 - **Going back** is normal: `bones back -s 3 -r "council reopened the spec"`. It
   archives the cleared gates (never deletes) and keeps the audit trail.
@@ -94,10 +100,38 @@ was signed at. So the trail isn't just honest — it's verifiable:
 bones verify
 ```
 
-fails on any edit, insertion, deletion, truncation, or a forged (`touch`-ed) gate
-file. With `sign=1` in your config, owner consent is additionally GPG-signed and
-verified. **Commit `.bones/` with your build** (`bones seal` does this) so git
-history anchors the chain against a full rewrite.
+exits non-zero on any of these:
+
+- a ledger link edited, inserted, deleted, reordered or truncated;
+- a gate record (`gates/*.ok`) edited after it was signed;
+- a forged gate file (`touch .bones/gates/8-promote.ok`) that was never signed;
+- a gate revoked by `bones back` and then copied back out of the archive;
+- stages skipped by editing `"stage"` in `state.json`, or a passed gate deleted;
+- a kill undone by editing `state.json` instead of `bones back`, or its record deleted;
+- (with `sign=1`) a GPG signature on owner consent that no longer validates.
+
+**Commit `.bones/` with your build** (`bones seal` verifies, then commits it) so
+git history anchors the chain.
+
+### Threat model — what the chain does and doesn't prove
+
+The chain is hashed, not keyed: anyone with write access to `.bones/` *and* the
+patience to recompute every hash can rewrite the whole thing consistently. What
+stops that is outside the ledger: the chain committed in git history (a rewrite
+shows up as a diff against what was sealed and pushed) and, for owner consent,
+GPG signatures made with a key the agent doesn't hold. In short:
+
+| Guarantee | Needs |
+|---|---|
+| Accidental or casual edits, skipped stages, forged/resurrected gates are caught | nothing — `bones verify` |
+| A full, consistent rewrite of `.bones/` is caught | `.bones/` sealed and pushed (`bones seal`) |
+| "The owner consented" is non-repudiable | `sign=1` with the owner's own GPG key |
+| The agent can't type the owner's approval itself | `init -H` and the agent has no interactive TTY |
+
+bones keeps an honest agent honest and makes a dishonest one leave evidence. It
+is not a sandbox: it can't stop an agent with full shell access from lying in the
+*content* of a note — which is why owner gates demand verbatim quotes and agent
+gates take `-e` evidence files pinned by sha256.
 
 ---
 
@@ -117,6 +151,7 @@ history anchors the chain against a full rewrite.
 | `stats` | per-stage time + regressions |
 | `config` · `doctor` | resolved settings · environment checks |
 | `reset -f` | wipe `.bones/` |
+| `help` · `version` | usage · version |
 
 ---
 
@@ -181,9 +216,11 @@ Commit `.bones/` alongside your work — it's the audit trail.
 bash scripts/test.sh
 ```
 
-36 checks: happy path, gate refusals, the six tamper attacks, back+redo,
+50 checks (47 when `gpg` isn't installed): happy path, gate refusals, the build
+gate, eleven tamper attacks on the ledger, gate files and `state.json`, back+redo,
 concurrency, templates, config, kill (stop/refusals/tamper/revive), the non-git
-warning + unanchored-chain flag, and (when `gpg` is present) signing.
+warning, the jq-less fallback parser, and GPG signing. CI runs it on Linux and
+macOS (bash 3.2), with and without `jq`, plus `shellcheck`.
 
 ---
 
