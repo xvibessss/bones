@@ -63,7 +63,7 @@ terminal — the owner types the approve themselves; a non-interactive agent she
 
 ```
 bones init -t <dir> [-n name] [-T template] [-H]   # start; -T code|ops|research; -H strict
-bones status                                # where am I, which gate is open, what to do
+bones status [--json]                       # where am I, which gate is open, what to do (--json: parse it)
 bones approve [-q "<quote>"] [-e <file>]... "<note>"   # satisfy current owner/agent gate
 bones build -c "<acceptance_cmd>" -s <spec.html> [-r rubric] [-R auto|codex|gemini]
                                                # the AUTO gate; passes only on loop.sh exit 0
@@ -72,7 +72,7 @@ bones kill -q "<owner quote>" -r "<reason>" # owner STOPS the build: terminal ch
 bones back -s <stage> -r "<reason>"         # regress (archives gate records, keeps audit); revives a killed pipeline
 bones note "<text>"                         # journal an observation mid-stage
 bones log                                   # full audit trail: gates + archive + journal
-bones verify                                # recompute the tamper-evident hash chain
+bones verify [--strict]                     # recompute the chain + re-hash -e evidence (--strict: drift fails)
 bones seal                                  # verify, then git-commit .bones/ (later verifies check it only grew)
 bones stats                                 # per-stage time + regressions from the journal
 bones config                                # show resolved owner/template/reviewer/sign
