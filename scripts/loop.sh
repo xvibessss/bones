@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# loop.sh — the acceptance-gated build loop for the ship-pipeline (stage 5).
+# loop.sh — the acceptance-gated build loop behind `bones build` (the auto gate).
 #
 # bones.sh (bones build) invokes this as:
 #   loop.sh -t <target> -c "<acceptance_cmd>" -s <spec> [-r <rubric>] [-R auto|codex|gemini] [-n <max>]
 #
 # Contract with bones: this script EXITS 0 iff the acceptance command exits 0.
-# Only that opens the stage-5 auto gate. Any other exit keeps the gate closed,
+# Only that opens the auto gate. Any other exit keeps the gate closed,
 # so the agent fixes the code and re-runs `bones build`.
 #
 # The "loop": if a reviewer CLI (-R codex|gemini) is available on PATH, loop.sh
@@ -51,7 +51,7 @@ esac
 # a few when a reviewer CLI can actually attempt fixes.
 [ -n "$maxn" ] || { [ -n "$reviewer_cli" ] && maxn=6 || maxn=1; }
 
-printf '== ship-pipeline build loop ==\n target : %s\n accept : %s\n spec   : %s\n rubric : %s\n review : %s\n budget : %s iteration(s)\n\n' \
+printf '== bones build loop ==\n target : %s\n accept : %s\n spec   : %s\n rubric : %s\n review : %s\n budget : %s iteration(s)\n\n' \
   "$target" "$accept" "${spec:-<none>}" "${rubric:-<none>}" "${reviewer_cli:-none available}" "$maxn"
 
 run_accept() { # streams output, returns the command's exit code
@@ -83,7 +83,11 @@ while :; do
     [ -n "$rubric" ] && [ -f "$rubric" ] && prompt="$prompt Rubric: $rubric."
     prompt="$prompt Read the failure, edit the code in $target to make the acceptance command pass, and stop."
     # Best-effort, non-fatal: if the reviewer errors we just re-loop and report.
-    "$reviewer_cli" "$prompt" || say "reviewer '$reviewer_cli' returned non-zero; re-checking anyway"
+    # Run the reviewer NON-interactively (a TUI would hang the gate waiting for input).
+    case "$reviewer_cli" in
+      codex)  codex exec "$prompt" ;;
+      gemini) gemini -p "$prompt" ;;
+    esac || say "reviewer '$reviewer_cli' returned non-zero; re-checking anyway"
   else
     printf '\nloop: no reviewer CLI available — nothing here can edit code.\n'
     printf 'loop: gate stays CLOSED. Fix the code, then re-run `bones build`.\n'

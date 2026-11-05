@@ -2,11 +2,29 @@
 #
 # install.sh — put `bones` on your PATH. Zero-dependency; nothing is compiled.
 # Re-runnable and non-destructive (updates the symlink in place).
+# `./install.sh --uninstall` removes it again.
 #
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
 SRC="$REPO/scripts/bones.sh"
+
+# ./install.sh --uninstall — remove the `bones` symlink(s) that point into this repo.
+if [ "${1:-}" = "--uninstall" ]; then
+  removed=0
+  for d in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
+    if [ -L "$d/bones" ] && [ "$(readlink "$d/bones")" = "$SRC" ]; then
+      rm -f "$d/bones" && echo "✓ removed $d/bones" && removed=1
+    fi
+  done
+  [ "$removed" -eq 1 ] || echo "install: no bones symlink pointing at $SRC found — nothing to remove."
+  exit 0
+fi
+case "${1:-}" in
+  "") ;;
+  -h|--help) echo "usage: ./install.sh [--uninstall]"; exit 0 ;;
+  *) echo "install: unknown option '$1' (usage: ./install.sh [--uninstall])" >&2; exit 2 ;;
+esac
 [ -f "$SRC" ] || { echo "install: can't find $SRC — run this from the repo root." >&2; exit 1; }
 chmod +x "$REPO/scripts/"*.sh 2>/dev/null || true
 

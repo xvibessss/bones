@@ -6,7 +6,7 @@
 #     bones build -c "./check.sh"      (loop.sh runs it; exit 0 = gate opens)
 #
 # A static HTML/CSS/JS deliverable often ships with NO test harness, so there is
-# nothing native for the gate to run (see friction F3). Copy this into your target
+# nothing native for the gate to run. Copy this into your target
 # as `check.sh`, make it executable, and adapt the checks to what "done" means for
 # THIS slice. Keep it fast and deterministic — it is the machine's definition of done.
 #
@@ -14,7 +14,7 @@
 # a real HTML validator if one is installed. Exit non-zero on the first failure.
 #
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 fail() { printf 'CHECK FAIL: %s\n' "$1" >&2; exit 1; }
 ok()   { printf 'CHECK ok: %s\n' "$1"; }

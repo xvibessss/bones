@@ -1,64 +1,44 @@
 #!/usr/bin/env bash
 #
-# bones.sh — enforced-orchestration state machine for the 9.5 ship-pipeline.
+# bones — the gated, tamper-evident ship pipeline.
 #
-# Where the ship-pipeline SKILL.md describes the gates in prose (an agent might
-# skip one), bones.sh ENFORCES them: it tracks the current stage in
-# .bones/state.json and REFUSES to advance past a gate until that gate is
-# satisfied.
+# A checklist you could skip, turned into a state machine that refuses to advance:
+# bones tracks the current stage in .bones/state.json and REFUSES to move past a
+# gate until that gate is satisfied, recording every gate into an append-only,
+# hash-chained ledger that `bones verify` can later prove was not faked.
 #
 # Gate types:
-#   owner  — the owner's call. Needs his VERBATIM words recorded via `approve -q "<quote>"`.
-#            In strict mode (init -H) it additionally requires a real TTY, i.e.
-#            the owner runs the approve himself — an agent shell cannot satisfy it.
-#   agent  — agent judgment. Needs a substantive note (evidence file(s) via -e
-#            strongly encouraged; warned when missing on evidence-heavy stages).
+#   owner  — the owner's call. Needs their VERBATIM words via `approve -q "<quote>"`.
+#            Strict mode (init -H) also requires an interactive terminal on stdin,
+#            so a non-interactive agent shell cannot satisfy it.
+#   agent  — a judgment call. Needs a substantive note (evidence via -e strongly
+#            encouraged; warned when missing on evidence-heavy stages).
 #   auto   — machine-verified. Only `bones build` + loop.sh exit 0 opens it.
 #   step   — no approval; `next` advances and records the step.
 #
-# The 10 stages:
-#   1  brainstorm        [agent]  prompt interrogation done, prompt tightened
-#   2  kill-or-commit    [owner]  the owner cleared the brutal <=30-min check (or killed it)
-#   3  spec              [owner]  the owner signed off the HTML spec
-#   4  council           [agent]  council verdict or second-pass critique recorded
-#   5  build-loop        [AUTO]   loop.sh acceptance gate exited 0 (run `bones build`)
-#   6  review-security   [agent]  adversarial review done + security gate cleared/NA
-#   7  staging           [agent]  staging e2e + click + competitor green BEFORE promote
-#   8  promote           [owner]  the owner's explicit go for production + smoke test green
-#   9  present           [step]   presented to the user
-#   10 operate           [owner]  the owner's operate/learn decision (double-down/park/kill)
+# The default "code" template (templates/code.tsv):
+#   1  brainstorm        [agent]  brief interrogated, scope + non-goals pinned
+#   2  kill-or-commit    [owner]  the owner committed (or killed it: `bones kill`)
+#   3  spec              [owner]  the owner signed off the spec
+#   4  council           [agent]  second-pass critique recorded
+#   5  build-loop        [auto]   acceptance check exited 0 (`bones build`)
+#   6  review-security   [agent]  adversarial review + security pass done
+#   7  staging           [agent]  staging validation green BEFORE promote
+#   8  promote           [owner]  the owner's explicit go for production
+#   9  present           [step]   presented
+#   10 operate           [owner]  operate/learn decision (double-down/park/kill)
 #
-# Usage:
-#   bones.sh init  -t <target_dir> [-n <name>] [-H] [-f]
-#   bones.sh status
-#   bones.sh approve [-q "<verbatim owner quote>"] [-e <evidence_file>]... "<note>"
-#   bones.sh build  [loop.sh args...]   # stage 5 only: runs ship-pipeline loop.sh
-#   bones.sh next                       # advance one stage IF the current gate is satisfied
-#   bones.sh kill -q "<owner quote>" -r "<reason>"  # owner STOPS the build: terminal chain link, status=killed
-#   bones.sh back -s <stage_n> -r "<reason>"   # regress (archives cleared gates, keeps audit); revives a killed pipeline
-#   bones.sh note "<text>"              # append an observation to the journal
-#   bones.sh log                        # full audit trail (gates + archive + journal)
-#   bones.sh verify                     # recompute the tamper-evident hash chain
-#   bones.sh seal                       # git-commit .bones/ (the external anchor; verifies first)
-#   bones.sh stats                      # per-stage time + regressions from the journal
-#   bones.sh config                     # show resolved owner/template/reviewer/sign
-#   bones.sh doctor                     # environment checks (sha, git, loop.sh, gpg, PATH)
-#   bones.sh reset [-f]                 # delete .bones state
+# Tamper-evidence: every satisfied gate appends a link to .bones/ledger embedding
+# the sha256 of the previous link, of the gate record and the target's git commit.
+# `bones verify` recomputes the chain and fails on any edit, insertion, deletion,
+# truncation, forged or resurrected gate file, or a stage skipped by editing state.
+# Commit .bones/ with your work (`bones seal`) so git history anchors the chain.
 #
-# init flags:  -t <dir>  -n <name>  -T <template: code|ops|research>  -H strict  -f force
-# config:      ~/.bonesrc and .bones/config — keys: owner, template, reviewer, sign
-#              (env overrides: BONES_OWNER, BONES_TEMPLATE, BONES_REVIEWER, BONES_SIGN)
-#
-# Tamper-evidence (the audit chain):
-#   Every satisfied gate appends a link to .bones/ledger. Each link embeds the
-#   sha256 of the previous link (git-style) plus the sha256 of the gate record
-#   and the repo's git commit at sign-time. `bones verify` recomputes the whole
-#   chain and FAILS on any edit, insertion, deletion, truncation, or a forged
-#   (unsigned) gate file. Commit .bones/ with the build so git anchors the chain.
+# Run `bones help` for usage.
 #
 set -uo pipefail
 
-BONES_VERSION="1.0.0"
+BONES_VERSION="1.1.0"
 
 # Resolve this script's real directory (following symlinks, e.g. ~/.local/bin/bones),
 # so we can find the shipped loop.sh and templates/ regardless of how bones was invoked.
@@ -202,11 +182,12 @@ find_bones() {
 }
 
 json_get() { # json_get <file> <key>
-  if command -v jq >/dev/null 2>&1; then
-    jq -r --arg k "$2" '.[$k] // empty' "$1" 2>/dev/null
+  if [ -z "${BONES_NO_JQ:-}" ] && command -v jq >/dev/null 2>&1; then   # BONES_NO_JQ=1 forces the fallback (tests)
+    jq -r --arg k "$2" '.[$k] | if . == null then empty else . end' "$1" 2>/dev/null
   else
-    grep -oE "\"$2\"[[:space:]]*:[[:space:]]*\"?[^,\"}]*\"?" "$1" 2>/dev/null \
-      | head -1 | sed -E "s/.*:[[:space:]]*//; s/^\"//; s/\"$//"
+    # quoted values may hold commas/colons (paths); bones never writes '"' inside one
+    grep -oE "\"$2\"[[:space:]]*:[[:space:]]*(\"[^\"]*\"|[^,}[:space:]]*)" "$1" 2>/dev/null \
+      | head -1 | sed -E "s/^\"[^\"]*\"[[:space:]]*:[[:space:]]*//; s/^\"//; s/\"$//"
   fi
 }
 
@@ -270,9 +251,9 @@ chain_head() { local h; h="$(state_get head 2>/dev/null)"; [ -n "$h" ] && printf
 # tamper-evident but NOT externally anchored (git's own history can't catch a full
 # rewrite). Used to warn in `status`/`verify` so the audit's strength isn't oversold.
 chain_unanchored() {
-  local f="$BONES_DIR/ledger" g s1 s2 s3 s4 s5 rest
+  local f="$BONES_DIR/ledger" g s1
   [ -f "$f" ] || return 0
-  while IFS='|' read -r s1 s2 s3 s4 s5 g rest; do
+  while IFS="|" read -r s1 _ _ _ _ g _; do
     [ -z "${s1:-}" ] && continue
     case "$g" in no-git|"") ;; *) return 1 ;; esac
   done < "$f"
@@ -384,6 +365,10 @@ cmd_init() {
   [ -d "$target" ] || die "target dir not found: $target"
   target="$(cd "$target" && pwd)"
   [ -z "$name" ] && name="$(basename "$target")"
+  # state.json is written without a JSON library: keep its strings unambiguous.
+  case "$name$target" in
+    *'"'*|*'\'*|*$'\n'*) die "pipeline name and target path may not contain '\"', '\\' or newlines" ;;
+  esac
   local dir="$target/.bones"
   if [ -d "$dir" ] && [ "$force" -ne 1 ]; then
     die "already initialized at $dir (use 'init -f' to reset, or 'status')"
@@ -488,7 +473,7 @@ cmd_approve() {
 
   if [ "$gt" = "owner" ]; then
     if [ "$strict" = "true" ] && [ ! -t 0 ]; then
-      die "STRICT MODE: stage $cur is an owner gate — $OWNER must run this approve himself from a real terminal. An agent shell cannot satisfy it."
+      die "STRICT MODE: stage $cur is an owner gate — $OWNER must run this approve themselves from an interactive terminal. A non-interactive agent shell cannot satisfy it."
     fi
     [ -n "$quote" ] || die "stage $cur is an OWNER gate — it needs $OWNER's verbatim words: approve -q \"<their exact words>\" \"<note>\". Ask them; do not paraphrase or infer."
   fi
@@ -534,10 +519,12 @@ cmd_build() {
   [ "${STAGE_GATE[$((cur-1))]}" = "auto" ] || die "build is only valid on an AUTO (machine-verified) gate — stage $cur is a ${STAGE_GATE[$((cur-1))]} gate. Advance to the build stage first."
   local build_idx="$cur"
   [ -x "$LOOP_SH" ] || [ -f "$LOOP_SH" ] || die "loop.sh not found at $LOOP_SH (set BONES_LOOP_SH to override)"
-  printf 'bones: running build loop (ship-pipeline loop.sh) — gate passes only on exit 0...\n\n'
-  if bash "$LOOP_SH" -t "$target" "$@"; then
+  printf 'bones: running build loop (loop.sh) — gate passes only on exit 0...\n\n'
+  # Config/env `reviewer` is the default -R; an explicit -R in the args wins
+  # (loop.sh's getopts keeps the last value).
+  if bash "$LOOP_SH" -t "$target" -R "$REVIEWER" "$@"; then
     {
-      printf '%s | build-loop | auto | loop.sh exit 0 (machine-verified; args: %s)\n' "$(now)" "$*"
+      printf '%s | %s | auto | loop.sh exit 0 (machine-verified; args: %s)\n' "$(now)" "${STAGE_KEYS[$((build_idx-1))]}" "$*"
       printf 'git: %s\n' "$(git_ref)"
     } > "$(gate_file "$build_idx")"
     ledger_append build "$build_idx" auto "$(sha_of "$(gate_file "$build_idx")")" "$(gate_rel "$build_idx")"
@@ -569,7 +556,7 @@ cmd_next() {
     journal step "stage $cur (${STAGE_KEYS[$((cur-1))]}) completed"
   elif ! gate_satisfied "$cur"; then
     case "$gt" in
-      auto)  die "GATE CLOSED: stage $cur (build-loop) not verified. Run 'bones build ...' until loop.sh exits 0." ;;
+      auto)  die "GATE CLOSED: stage $cur (${STAGE_KEYS[$((cur-1))]}) not machine-verified. Run 'bones build ...' until loop.sh exits 0." ;;
       owner) die "GATE CLOSED: stage $cur (${STAGE_TITLES[$((cur-1))]}) is $(OWNER_UP)'S call. Ask them, then: bones approve -q \"<their exact words>\" \"<note>\"" ;;
       *)     die "GATE CLOSED: stage $cur (${STAGE_TITLES[$((cur-1))]}) needs sign-off. Run: bones approve \"<note>\"" ;;
     esac
@@ -582,7 +569,7 @@ cmd_next() {
   write_state "$BONES_DIR" "$name" "$target" "$nxt" "$created" "$strict"
   if [ "$nxt" -gt "$NSTAGES" ]; then
     local total=""; secs="$(elapsed_since "$created" 2>/dev/null)" && total="$(human_dur "$secs")"
-    journal done "all 10 stages complete${total:+ (total: $total)}"
+    journal "done" "all $NSTAGES stages complete${total:+ (total: $total)}"
     printf 'bones: stage %s complete%s. 🎉 ALL STAGES DONE — pipeline shipped & gated end to end.%s\n' \
       "$cur" "${dur:+ ($dur)}" "${total:+  total: $total}"
   else
@@ -609,7 +596,7 @@ cmd_back() {
   [ "$to" -ge 1 ] && [ "$to" -le "$NSTAGES" ] || die "stage must be 1..$NSTAGES"
   [ "$to" -le "$cur" ] || die "back only goes backward (you are at stage $cur); use gates + next to go forward"
   # Archive (don't delete) every gate record from the target stage on — audit trail survives.
-  local arch="$BONES_DIR/gates/archive/$(now | tr ':' '-')-back-to-$to"
+  local arch; arch="$BONES_DIR/gates/archive/$(now | tr ":" "-")-back-to-$to"
   local n="$to" moved=0
   while [ "$n" -le "$NSTAGES" ]; do
     if [ -f "$(gate_file "$n")" ]; then
@@ -648,7 +635,7 @@ cmd_kill() {
   is_killed && die "pipeline is already killed — nothing to do (see 'bones status')"
   # Kill is the OWNER's decision to STOP. It needs their verbatim words, like any owner gate.
   if [ "$strict" = "true" ] && [ ! -t 0 ]; then
-    die "STRICT MODE: kill is $(OWNER_UP)'S decision — they must run this from a real terminal. An agent shell cannot satisfy it."
+    die "STRICT MODE: kill is $(OWNER_UP)'S decision — they must run this from an interactive terminal. A non-interactive agent shell cannot satisfy it."
   fi
   [ -n "$quote" ] || die "kill is an OWNER decision — it needs $OWNER's verbatim words: kill -q \"<their exact words>\" -r \"<reason>\". Ask them; do not paraphrase or infer."
   [ -n "$reason" ] || die "kill needs -r \"<reason>\" — why the build is being stopped (goes on the permanent record)"
@@ -721,7 +708,11 @@ cmd_verify() {
 
   # Pass 1 — integrity: recompute each link's hash and check the prev-links form
   # one unbroken chain from genesis. Any edit/insert/delete/reorder is caught here.
+  # Along the way, remember (by link position) the last signing link of every gate
+  # path, the last regression per target stage and the last kill: pass 3 needs them.
   local prev="$GENESIS" n=0 seq ts ev st gt git p rel csha hash canon calc
+  local -a sign_at sign_sha back_at
+  local kill_at=0 kill_sha="" back_any=0 gi
   while IFS='|' read -r seq ts ev st gt git p rel csha hash; do
     [ -z "${seq:-}" ] && continue
     n=$((n+1))
@@ -736,6 +727,19 @@ cmd_verify() {
       exit 1
     fi
     prev="$hash"
+    case "$ev" in
+      approve|build|step)
+        gi="${rel#gates/}"; gi="${gi%%-*}"
+        case "$gi" in ''|*[!0-9]*) ;; *)
+          if [ "$gi" -ge 1 ] && [ "$gi" -le "$NSTAGES" ] && [ "$rel" = "$(gate_rel "$gi")" ]; then
+            sign_at[$gi]="$n"; sign_sha[$gi]="$csha"
+          fi ;;
+        esac ;;
+      back)
+        case "$st" in ''|*[!0-9]*) ;; *) back_at[$st]="$n" ;; esac
+        back_any="$n" ;;
+      kill) kill_at="$n"; kill_sha="$csha" ;;
+    esac
   done < "$ledger"
   [ "$n" -gt 0 ] || die "audit chain is empty"
 
@@ -747,35 +751,60 @@ cmd_verify() {
     exit 1
   fi
 
-  # Pass 3 — freshness: every live gate file must still match what was signed
-  # (last ledger entry per path wins, so back+redo is handled).
-  local i gf rel2 last csha2 live
+  # Pass 3 — gates: every live gate file must match what was signed, must not have
+  # been revoked by a later `back` (restoring an archived record is a forgery), and
+  # every stage BEFORE the current one must hold such a gate — otherwise the stage
+  # in state.json was edited to skip gates. (Last signing link per path wins, so
+  # back+redo is handled.)
+  local cur; cur="$(state_get stage)"
+  case "$cur" in ''|*[!0-9]*) printf 'bones: ✗ state.json has no valid stage ("%s") — state edited or corrupt.\n' "$cur" >&2; exit 1 ;; esac
+  local i gf rel2 live revoked=0
   for i in $(seq 1 "$NSTAGES"); do
-    gf="$(gate_file "$i")"; [ -f "$gf" ] || continue
-    rel2="$(gate_rel "$i")"
-    last="$(grep -F "|$rel2|" "$ledger" | tail -1)"
-    if [ -z "$last" ]; then
+    [ "${back_at[$i]:-0}" -gt "$revoked" ] && revoked="${back_at[$i]}"   # backs to stage <= i revoke gate i
+    gf="$(gate_file "$i")"; rel2="$(gate_rel "$i")"
+    if [ ! -f "$gf" ]; then
+      if [ "$i" -lt "$cur" ]; then
+        printf 'bones: ✗ pipeline is at stage %s but stage %s (%s) has no gate record — stages were skipped (state.json edited) or a gate record was deleted.\n' "$cur" "$i" "${STAGE_KEYS[$((i-1))]}" >&2
+        exit 1
+      fi
+      continue
+    fi
+    if [ -z "${sign_at[$i]:-}" ]; then
       # A gate file with no chain link = the classic forgery (`touch …-promote.ok`).
       printf 'bones: ✗ gate file %s exists but was NEVER signed into the chain — forged or corrupt.\n' "$rel2" >&2
       exit 1
     fi
-    csha2="$(printf '%s' "$last" | awk -F'|' '{print $9}')"
+    if [ "${sign_at[$i]}" -lt "$revoked" ]; then
+      printf 'bones: ✗ gate file %s was revoked by a later `bones back` but is live again — restored from the archive, not re-approved.\n' "$rel2" >&2
+      exit 1
+    fi
     live="$(sha_of "$gf")"
-    if [ "$csha2" != "$live" ]; then
+    if [ "${sign_sha[$i]}" != "$live" ]; then
       printf 'bones: ✗ gate file %s was MODIFIED after signing (live content != chain signature).\n' "$rel2" >&2
       exit 1
     fi
   done
-  # The kill record (if present) is freshness-checked the same way as a gate file.
+  # The kill record: the chain alone decides whether the pipeline is killed (a kill
+  # link not followed by a revive), and state.json + killed.ok must agree with it.
+  local chain_killed=0; [ "$kill_at" -gt "$back_any" ] && chain_killed=1
+  if [ "$chain_killed" -eq 1 ] && ! is_killed; then
+    printf 'bones: ✗ the chain records a KILL that was never revived, but state.json says "%s" — state edited.\n' "$(state_get status)" >&2; exit 1
+  fi
+  if [ "$chain_killed" -eq 0 ] && is_killed; then
+    printf 'bones: ✗ state.json says killed but the chain holds no live kill link — state edited.\n' >&2; exit 1
+  fi
   if [ -f "$BONES_DIR/killed.ok" ]; then
-    last="$(grep -F "|killed.ok|" "$ledger" | tail -1)"
-    if [ -z "$last" ]; then
+    if [ "$kill_at" -eq 0 ]; then
       printf 'bones: ✗ killed.ok exists but was NEVER signed into the chain — forged or corrupt.\n' >&2; exit 1
     fi
-    csha2="$(printf '%s' "$last" | awk -F'|' '{print $9}')"; live="$(sha_of "$BONES_DIR/killed.ok")"
-    if [ "$csha2" != "$live" ]; then
+    if [ "$chain_killed" -eq 0 ]; then
+      printf 'bones: ✗ killed.ok was revoked by a later `bones back` but is live again — restored from the archive.\n' >&2; exit 1
+    fi
+    if [ "$kill_sha" != "$(sha_of "$BONES_DIR/killed.ok")" ]; then
       printf 'bones: ✗ killed.ok was MODIFIED after signing (live content != chain signature).\n' >&2; exit 1
     fi
+  elif [ "$chain_killed" -eq 1 ]; then
+    printf 'bones: ✗ the chain records a KILL but killed.ok is missing — kill record deleted.\n' >&2; exit 1
   fi
 
   # Pass 4 — signatures (optional): any GPG-signed owner head must still validate.
@@ -926,6 +955,42 @@ cmd_reset() {
   rm -rf "$BONES_DIR"; printf 'bones: reset (removed %s)\n' "$BONES_DIR"
 }
 
+usage() {
+  cat <<EOF
+bones $BONES_VERSION — the gated, tamper-evident ship pipeline
+
+Usage: bones <command> [options]
+
+Pipeline
+  init -t <dir> [-n name] [-T template] [-H] [-f]
+                         start a pipeline in <dir> (-T code|ops|research, -H strict owner gates)
+  status                 where am I, which gate is open, what to do next (default command)
+  approve [-q "quote"] [-e file]... "note"
+                         satisfy the current owner/agent gate (owner gates need -q)
+  build -c "cmd" [-s spec] [-r rubric] [-R auto|codex|gemini|none] [-n max]
+                         the auto gate: passes only when the acceptance command exits 0
+  next                   advance one stage, only if the current gate is satisfied
+  back -s <n> -r "why"   go back to stage <n> (archives gates, keeps the audit trail)
+  kill -q "quote" -r "why"
+                         the owner stops the build (terminal; 'back' can revive it)
+
+Audit
+  note "text"            journal an observation
+  log                    full audit trail: gates, archive, chain, journal
+  verify                 recompute the tamper-evident chain (exit 1 if anything was faked)
+  seal                   verify, then git-commit .bones/ (the external anchor)
+  stats                  per-stage time and regressions
+
+Setup
+  config                 show resolved settings (~/.bonesrc -> .bones/config -> BONES_* env)
+  doctor                 check the environment (sha256, git, loop.sh, gpg, PATH)
+  reset -f               delete .bones/
+  version                print the version
+
+Docs: https://github.com/xvibessss/bones
+EOF
+}
+
 # --- dispatch --------------------------------------------------------------
 BONES_DIR="${BONES_DIR:-}"
 sub="${1:-status}"; shift || true
@@ -946,6 +1011,6 @@ case "$sub" in
   doctor)  cmd_doctor ;;
   reset)   cmd_reset "$@" ;;
   version|--version|-v) printf 'bones %s\n' "$BONES_VERSION" ;;
-  -h|--help|help) grep '^#' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown subcommand: $sub (try: init status approve build next back kill note log verify seal stats config doctor reset)" ;;
+  -h|--help|help) usage ;;
+  *) die "unknown subcommand: $sub — run 'bones help'" ;;
 esac
