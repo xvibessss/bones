@@ -13,7 +13,7 @@ export BONES_LOOP_SH="${BONES_LOOP_SH:-$HERE/loop.sh}"
 
 pass=0; fail=0
 ok()  { pass=$((pass+1)); printf '  \033[32m✓\033[0m %s\n' "$1"; }
-no()  { fail=$((fail+1)); printf '  \033[31m✗\033[0m %s\n' "$1"; [ -n "${2:-}" ] && printf '      %s\n' "$2"; }
+no()  { fail=$((fail+1)); printf '  \033[31m✗\033[0m %s\n' "$1"; [ -n "${2:-}" ] && printf '      %s\n' "$2"; return 0; }
 b()   { bash "$BONES" "$@"; }
 
 # helper: build a repo + pipeline advanced through stage N (default: to stage 5 pre-build)
@@ -147,8 +147,10 @@ if command -v gpg >/dev/null 2>&1; then
     ( cd "$T" && GNUPGHOME="$GH" BONES_SIGN=1 bash "$BONES" approve -q "ship it" "committed" >/dev/null 2>&1 )
     ls "$T"/.bones/sigs/*.asc >/dev/null 2>&1 && ok "signing: owner gate produced a signature" || no "signing: no signature file"
     ( cd "$T" && GNUPGHOME="$GH" bash "$BONES" verify >/dev/null 2>&1 ) && ok "signing: signed chain verifies" || no "signing: valid sig rejected"
-    # tamper the signature → verify must fail
-    echo garbage >> "$T"/.bones/sigs/*.asc
+    # tamper the signature → verify must fail. Corrupt the first base64 line of
+    # the armored body: appending after the END line is not a tamper, gpg
+    # ignores trailing data and the signature still verifies.
+    perl -pi -e 'if ($body && !$done && /^[A-Za-z0-9+\/]{8}/) { s/^(.)/$1 eq "A" ? "B" : "A"/e; $done = 1 } $body = 1 if /^\s*$/' "$T"/.bones/sigs/*.asc
     ( cd "$T" && GNUPGHOME="$GH" bash "$BONES" verify >/dev/null 2>&1 ) && no "signing: tampered sig not caught" || ok "signing: tampered signature caught"
     rm -rf "$T"
   else printf '  \033[33m•\033[0m signing: gpg present but ephemeral keygen failed — skipped\n'; fi

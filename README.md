@@ -19,9 +19,6 @@ and Linux.
 
 ## Download & install
 
-> This repo is **private**. Ask the owner to add you as a collaborator first
-> (GitHub → Settings → Collaborators), then:
-
 ```bash
 git clone https://github.com/xvibessss/bones.git
 cd bones
@@ -187,6 +184,14 @@ bash scripts/test.sh
 36 checks: happy path, gate refusals, the six tamper attacks, back+redo,
 concurrency, templates, config, kill (stop/refusals/tamper/revive), the non-git
 warning + unanchored-chain flag, and (when `gpg` is present) signing.
+
+---
+
+## Contributing
+
+Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Found a way to fake a gate or break the audit chain? Please report it privately
+first, as described there.
 
 ---
 
